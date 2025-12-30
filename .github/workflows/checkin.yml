@@ -1,0 +1,52 @@
+name: Telegram Auto Checkin
+
+on:
+  schedule:
+    - cron: '30 0 * * *' # 北京时间每天上午 8:30 自动运行
+  workflow_dispatch: # 支持手动点击运行
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout codes
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python_version: '3.10'
+
+      - name: Install dependencies
+        run: pip install telethon
+
+      - name: Run Checkin Script
+        env:
+          API_ID: ${{ secrets.API_ID }}
+          API_HASH: ${{ secrets.API_HASH }}
+          SESSION: ${{ secrets.SESSION }}
+          CHECK_IN_CONFIG: ${{ secrets.CHECK_IN_CONFIG }}
+        run: |
+          cat << 'EOF' > run_checkin.py
+          import asyncio, json, os
+          from telethon import TelegramClient
+          from telethon.sessions import StringSession
+
+          async def main():
+              api_id = int(os.environ['API_ID'])
+              api_hash = os.environ['API_HASH']
+              session = os.environ['SESSION']
+              configs = json.loads(os.environ['CHECK_IN_CONFIG'])
+              
+              async with TelegramClient(StringSession(session), api_id, api_hash) as client:
+                  for item in configs:
+                      try:
+                          await client.send_message(item['peer'], item['message'])
+                          print(f"成功向 {item['peer']} 发送了 {item['message']}")
+                      except Exception as e:
+                          print(f"向 {item['peer']} 签到失败: {e}")
+
+          if __name__ == '__main__':
+              asyncio.run(main())
+          EOF
+          python run_checkin.py
