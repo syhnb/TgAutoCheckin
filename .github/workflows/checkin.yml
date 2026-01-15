@@ -44,24 +44,18 @@ jobs:
                   return
 
               # --- 🛡️ 核心升级：1:1 还原你的真实设备 (数字孪生) ---
-              # 这会让 TG 官方认为你只是在用自己的手机
               async with TelegramClient(
                   StringSession(session), 
                   api_id, 
                   api_hash,
-                  # 📱 你的设备型号 (一加 13)
                   device_model="OnePlus 13", 
-                  # 🤖 你的系统版本 (Android 16 / ColorOS 16)
                   system_version="Android 16", 
-                  # 🚀 你的 TG 客户端版本 (保持和你手机一致)
                   app_version="12.3.1",
-                  # 🇨🇳 语言设置 (和截图一致)
                   lang_code="zh",
                   system_lang_code="zh-CN"
               ) as client:
                   
                   # --- 防封机制 1：全局拟人化赖床 ---
-                  # 随机发呆 1~10 分钟，打破准点规律
                   global_delay = random.randint(60, 600)
                   print(f"😪 【拟人化】刚醒，先发呆 {global_delay} 秒再开始干活...")
                   await asyncio.sleep(global_delay)
@@ -94,6 +88,12 @@ jobs:
                                       for row in bot_msg.buttons:
                                           for btn in row:
                                               if item['button'] in btn.text:
+                                                  # --- 🛡️ 新增机制 5：发送“已读”回执 ---
+                                                  # 在点击之前，先告诉服务器“我看到这条消息了”
+                                                  # 这会让消息状态变为“双勾”，完美模拟真人
+                                                  await client.send_read_acknowledge(item['peer'], message=bot_msg)
+                                                  print(f"👁️ 已标记消息为[已读] (双勾)")
+                                                  
                                                   # 触觉延迟：0.3~0.8秒 (模拟手指点击)
                                                   await asyncio.sleep(random.uniform(0.3, 0.8))
                                                   await btn.click()
