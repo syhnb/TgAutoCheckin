@@ -29,9 +29,18 @@ jobs:
           CHECK_IN_CONFIG: ${{ secrets.CHECK_IN_CONFIG }}
         run: |
           cat << 'EOF' > run_checkin.py
-          import asyncio, json, os, random
+          import asyncio, json, os, random, re
           from telethon import TelegramClient
           from telethon.sessions import StringSession
+
+          # --- 增强功能：智能关键词备选库 ---
+          # 如果配置的“签到”没找到，脚本会自动尝试寻找这些词
+          FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
+
+          def clean_text(text):
+              """清理文本：去除Emoji、空格、特殊符号，只保留核心字符"""
+              # 这一步是为了防止 "✅ 签到 " 这种带符号的文本匹配失败
+              return re.sub(r'[^\w\u4e00-\u9fff]+', '', text).lower()
 
           async def main():
               try:
@@ -43,7 +52,7 @@ jobs:
                   print(f"配置读取失败: {e}")
                   return
 
-              # --- 🛡️ 核心升级：1:1 还原你的真实设备 (数字孪生) ---
+              # --- 🛡️ 1:1 还原真实设备 (OnePlus 13) ---
               async with TelegramClient(
                   StringSession(session), 
                   api_id, 
@@ -77,7 +86,6 @@ jobs:
                           
                           # --- 防封机制 4：拟人化视觉反应 ---
                           if item.get('button'):
-                              # 视觉延迟：2~5秒 (模拟眼睛寻找按钮)
                               reaction_time = random.randint(2, 5)
                               print(f"👀 等待面板弹出... ({reaction_time} 秒)")
                               await asyncio.sleep(reaction_time)
@@ -85,16 +93,37 @@ jobs:
                               found = False
                               async for bot_msg in client.iter_messages(item['peer'], limit=3):
                                   if bot_msg.buttons:
+                                      # --- 👁️ 增强功能：视觉日志 ---
+                                      # 打印出脚本究竟“看”到了哪些按钮，方便排查
+                                      visible_buttons = []
                                       for row in bot_msg.buttons:
                                           for btn in row:
-                                              if item['button'] in btn.text:
-                                                  # --- 🛡️ 新增机制 5：发送“已读”回执 ---
-                                                  # 在点击之前，先告诉服务器“我看到这条消息了”
-                                                  # 这会让消息状态变为“双勾”，完美模拟真人
+                                              visible_buttons.append(btn.text)
+                                      print(f"🔎 屏幕识别结果: {visible_buttons}")
+
+                                      for row in bot_msg.buttons:
+                                          for btn in row:
+                                              # --- 核心识别逻辑增强 ---
+                                              btn_clean = clean_text(btn.text)
+                                              target_clean = clean_text(item['button'])
+                                              
+                                              # 1. 优先匹配配置的关键词 (去噪匹配)
+                                              is_match = target_clean in btn_clean
+                                              
+                                              # 2. 如果没匹配上，启动智能备选 (防止服主改文案)
+                                              if not is_match:
+                                                  for fallback in FALLBACK_KEYWORDS:
+                                                      if clean_text(fallback) in btn_clean:
+                                                          is_match = True
+                                                          print(f"💡 触发智能识别：原定[{item['button']}]未找到，但发现了同义词[{btn.text}]")
+                                                          break
+
+                                              if is_match:
+                                                  # --- 防封机制 5：发送“已读”回执 ---
                                                   await client.send_read_acknowledge(item['peer'], message=bot_msg)
                                                   print(f"👁️ 已标记消息为[已读] (双勾)")
                                                   
-                                                  # 触觉延迟：0.3~0.8秒 (模拟手指点击)
+                                                  # 触觉延迟
                                                   await asyncio.sleep(random.uniform(0.3, 0.8))
                                                   await btn.click()
                                                   print(f"✅ 极速点击：[{btn.text}]")
@@ -103,7 +132,7 @@ jobs:
                                           if found: break
                                   if found: break
                               if not found:
-                                  print(f"⚠️ 未找到包含 [{item['button']}] 的按钮")
+                                  print(f"⚠️ 未找到目标按钮，且智能备选也未匹配成功。")
                       except Exception as e:
                           print(f"❌ {item['peer']} 执行失败: {e}")
 
