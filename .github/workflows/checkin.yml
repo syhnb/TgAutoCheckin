@@ -1,4 +1,4 @@
-name: Telegram Auto Checkin
+name: Telegram Auto Checkin (Main)
 
 on:
   schedule:
@@ -27,114 +27,178 @@ jobs:
           API_HASH: ${{ secrets.API_HASH }}
           SESSION: ${{ secrets.SESSION }}
           CHECK_IN_CONFIG: ${{ secrets.CHECK_IN_CONFIG }}
+          MAIL_USER: ${{ secrets.MAIL_USER }}
+          MAIL_PASS: ${{ secrets.MAIL_PASS }}
         run: |
           cat << 'EOF' > run_checkin.py
-          import asyncio, json, os, random, re
+          import asyncio, json, os, random, re, datetime, smtplib
           from telethon import TelegramClient
           from telethon.sessions import StringSession
+          from email.mime.text import MIMEText
+          from email.header import Header
 
-          # --- 增强功能：智能关键词备选库 ---
-          # 如果配置的“签到”没找到，脚本会自动尝试寻找这些词
+          # --- 配置区 ---
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
+          DANGER_KEYWORDS = ["验证码", "captcha", "verification", "封禁", "ban", "异常", "人工"]
+          
+          execution_log = []
+          success_count = 0
+          fail_count = 0
 
           def clean_text(text):
-              """清理文本：去除Emoji、空格、特殊符号，只保留核心字符"""
-              # 这一步是为了防止 "✅ 签到 " 这种带符号的文本匹配失败
               return re.sub(r'[^\w\u4e00-\u9fff]+', '', text).lower()
 
+          def log(message):
+              print(message)
+              utc_now = datetime.datetime.utcnow()
+              cst_now = utc_now + datetime.timedelta(hours=8)
+              timestamp = cst_now.strftime("%H:%M:%S")
+              execution_log.append(f"[{timestamp}] {message}")
+
+          def send_email_report():
+              """发送统一的恶趣味邮件"""
+              try:
+                  mail_user = os.environ.get('MAIL_USER')
+                  mail_pass = os.environ.get('MAIL_PASS')
+                  if not mail_user or not mail_pass: return
+
+                  log_html = "<br>".join(execution_log)
+                  today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
+                  
+                  # --- 统一的恶趣味文案 ---
+                  if fail_count == 0:
+                      status_color = "#2ecc71" # Green
+                      flavor_text = "🤖 报告主人：您的电子奴隶 (V4.9) 运转完美。我们成功欺骗了碳基生物的审查，所有羊毛都已收割进您的数字仓库。"
+                  else:
+                      status_color = "#e74c3c" # Red
+                      flavor_text = "⚠️ 报告主人：收割过程中遭遇反抗力量。部分Bot识破了伪装，建议对它们进行降维打击。"
+
+                  html_content = f"""
+                  <div style="font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border-radius: 8px; overflow: hidden; box-shadow: 0 10px 20px rgba(0,0,0,0.2); border: 1px solid #e0e0e0;">
+                      <div style="background: #2c3e50; padding: 25px; text-align: center;">
+                          <h1 style="margin: 0; color: #ecf0f1; font-size: 22px; letter-spacing: 2px;">DAILY WAR REPORT</h1>
+                          <p style="margin: 5px 0 0; color: #bdc3c7; font-size: 10px; text-transform: uppercase;">Operation: Cyber Harvest | Date: {today}</p>
+                      </div>
+                      
+                      <div style="background-color: #f9f9f9; padding: 30px;">
+                          <div style="background: #fff; padding: 20px; border-left: 5px solid {status_color}; box-shadow: 0 2px 5px rgba(0,0,0,0.05); margin-bottom: 25px;">
+                              <p style="font-size: 14px; color: #34495e; line-height: 1.6; margin: 0;"><strong>&gt; AI_LOG_SUMMARY:</strong><br>{flavor_text}</p>
+                          </div>
+
+                          <div style="display: flex; justify-content: space-between; margin-bottom: 25px; gap: 10px;">
+                              <div style="flex: 1; background: #fff; padding: 15px; text-align: center; border: 1px solid #eee; border-radius: 6px;">
+                                  <div style="font-size: 12px; color: #95a5a6; text-transform: uppercase;">Success</div>
+                                  <div style="font-size: 24px; font-weight: bold; color: #2ecc71;">{success_count}</div>
+                              </div>
+                              <div style="flex: 1; background: #fff; padding: 15px; text-align: center; border: 1px solid #eee; border-radius: 6px;">
+                                  <div style="font-size: 12px; color: #95a5a6; text-transform: uppercase;">Failure</div>
+                                  <div style="font-size: 24px; font-weight: bold; color: #e74c3c;">{fail_count}</div>
+                              </div>
+                          </div>
+
+                          <div style="font-size: 12px; color: #7f8c8d; margin-bottom: 10px; font-weight: bold;">&gt; TERMINAL_OUTPUT_STREAM:</div>
+                          <div style="background: #1e272e; color: #00d2d3; padding: 15px; font-family: Consolas, monospace; font-size: 11px; line-height: 1.5; border-radius: 4px; height: 250px; overflow-y: auto;">
+                              {log_html}
+                          </div>
+                      </div>
+                      
+                      <div style="background: #ecf0f1; padding: 15px; text-align: center; color: #7f8c8d; font-size: 11px;">
+                          Generated by Checkin_Bot_V4.9 | 您的忠诚，是我的设定。
+                      </div>
+                  </div>
+                  """
+
+                  message = MIMEText(html_content, 'html', 'utf-8')
+                  message['From'] = Header("Lily签到管家", 'utf-8')
+                  message['To'] = Header("Master", 'utf-8')
+                  
+                  # 👑 标题区分点：大号专用标题
+                  message['Subject'] = Header(f"Telegram每日战报 🍷 | 尊贵的本体：今日份的“赛博贡品”已入库", 'utf-8')
+
+                  smtpObj = smtplib.SMTP_SSL('smtp.qq.com', 465)
+                  smtpObj.login(mail_user, mail_pass)
+                  smtpObj.sendmail(mail_user, [mail_user], message.as_string())
+                  print("📧 邮件推送成功！")
+              except Exception as e:
+                  print(f"❌ 邮件发送失败: {e}")
+
           async def main():
+              global success_count, fail_count
               try:
                   api_id = int(os.environ['API_ID'])
                   api_hash = os.environ['API_HASH']
                   session = os.environ['SESSION']
                   configs = json.loads(os.environ['CHECK_IN_CONFIG'])
               except Exception as e:
-                  print(f"配置读取失败: {e}")
                   return
 
-              # --- 🛡️ 1:1 还原真实设备 (OnePlus 13) ---
+              # 🛡️ 1:1 还原真实设备 (OnePlus 13)
               async with TelegramClient(
-                  StringSession(session), 
-                  api_id, 
-                  api_hash,
-                  device_model="OnePlus 13", 
-                  system_version="Android 16", 
-                  app_version="12.3.1",
-                  lang_code="zh",
-                  system_lang_code="zh-CN"
+                  StringSession(session), api_id, api_hash,
+                  device_model="OnePlus 13", system_version="Android 16", 
+                  app_version="12.3.1", lang_code="zh", system_lang_code="zh-CN"
               ) as client:
                   
-                  # --- 防封机制 1：全局拟人化赖床 ---
+                  log("🚀 **System Start (V4.9)**")
+                  
                   global_delay = random.randint(60, 600)
-                  print(f"😪 【拟人化】刚醒，先发呆 {global_delay} 秒再开始干活...")
+                  log(f"😪 拟人化休眠中... (Duration: {global_delay}s)")
                   await asyncio.sleep(global_delay)
                   
-                  # --- 防封机制 2：彻底乱序执行 ---
                   random.shuffle(configs)
-                  print(f"🔀 今日签到顺序已随机打乱，老司机准备发车...")
+                  log("🔀 执行序列已随机重组")
 
                   for item in configs:
                       try:
-                          # --- 防封机制 3：模拟切换窗口 (15~50秒) ---
                           wait_time = random.randint(15, 50) 
-                          print(f"⏳ 切换到 {item['peer']}，等待 {wait_time} 秒...")
+                          print(f"⏳ 切换会话: {item['peer']} (Wait: {wait_time}s)")
                           await asyncio.sleep(wait_time)
                           
-                          # --- 发送指令 ---
-                          print(f"向 {item['peer']} 发送: {item['message']}")
                           await client.send_message(item['peer'], item['message'])
                           
-                          # --- 防封机制 4：拟人化视觉反应 ---
                           if item.get('button'):
-                              reaction_time = random.randint(2, 5)
-                              print(f"👀 等待面板弹出... ({reaction_time} 秒)")
-                              await asyncio.sleep(reaction_time)
-                              
+                              await asyncio.sleep(random.randint(2, 5))
                               found = False
                               async for bot_msg in client.iter_messages(item['peer'], limit=3):
-                                  if bot_msg.buttons:
-                                      # --- 👁️ 增强功能：视觉日志 ---
-                                      # 打印出脚本究竟“看”到了哪些按钮，方便排查
-                                      visible_buttons = []
-                                      for row in bot_msg.buttons:
-                                          for btn in row:
-                                              visible_buttons.append(btn.text)
-                                      print(f"🔎 屏幕识别结果: {visible_buttons}")
+                                  if bot_msg.text:
+                                      for danger in DANGER_KEYWORDS:
+                                          if danger in bot_msg.text.lower():
+                                              log(f"💥 **DANGER DETECTED!** Target: {item['peer']} Keyword: [{danger}]")
+                                              log("🛑 Protocols Aborted. Safety Mode Engaged.")
+                                              send_email_report()
+                                              return 
 
+                                  if bot_msg.buttons:
                                       for row in bot_msg.buttons:
                                           for btn in row:
-                                              # --- 核心识别逻辑增强 ---
                                               btn_clean = clean_text(btn.text)
                                               target_clean = clean_text(item['button'])
-                                              
-                                              # 1. 优先匹配配置的关键词 (去噪匹配)
                                               is_match = target_clean in btn_clean
-                                              
-                                              # 2. 如果没匹配上，启动智能备选 (防止服主改文案)
                                               if not is_match:
                                                   for fallback in FALLBACK_KEYWORDS:
-                                                      if clean_text(fallback) in btn_clean:
-                                                          is_match = True
-                                                          print(f"💡 触发智能识别：原定[{item['button']}]未找到，但发现了同义词[{btn.text}]")
-                                                          break
-
+                                                      if clean_text(fallback) in btn_clean: is_match = True; break
                                               if is_match:
-                                                  # --- 防封机制 5：发送“已读”回执 ---
                                                   await client.send_read_acknowledge(item['peer'], message=bot_msg)
-                                                  print(f"👁️ 已标记消息为[已读] (双勾)")
-                                                  
-                                                  # 触觉延迟
                                                   await asyncio.sleep(random.uniform(0.3, 0.8))
                                                   await btn.click()
-                                                  print(f"✅ 极速点击：[{btn.text}]")
+                                                  log(f"✅ {item['peer']}：ACQUIRED [{btn.text}]")
                                                   found = True
+                                                  success_count += 1
                                                   break
                                           if found: break
                                   if found: break
                               if not found:
-                                  print(f"⚠️ 未找到目标按钮，且智能备选也未匹配成功。")
+                                  log(f"⚠️ {item['peer']}：TARGET NOT FOUND")
+                                  fail_count += 1
+                          else:
+                              log(f"✅ {item['peer']}：COMMAND SENT")
+                              success_count += 1
                       except Exception as e:
-                          print(f"❌ {item['peer']} 执行失败: {e}")
+                          log(f"❌ {item['peer']}：ERROR - {str(e)}")
+                          fail_count += 1
+
+                  log("👋 Mission Complete. Shutting down.")
+                  send_email_report()
 
           if __name__ == '__main__':
               asyncio.run(main())
