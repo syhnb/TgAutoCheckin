@@ -3,8 +3,6 @@ name: Telegram Auto Checkin
 on:
   schedule:
     # ⚠️ 黄金时间：北京时间 08:30 启动
-    # (UTC 00:30 + 8小时 = 08:30)
-    # 避开 0点脚本高峰，避开 3点维护期，混入早高峰真人流量
     - cron: '30 0 * * *'
   workflow_dispatch:
 
@@ -45,25 +43,36 @@ jobs:
                   print(f"配置读取失败: {e}")
                   return
 
-              async with TelegramClient(StringSession(session), api_id, api_hash) as client:
+              # --- 🛡️ 核心升级：1:1 还原你的真实设备 (数字孪生) ---
+              # 这会让 TG 官方认为你只是在用自己的手机
+              async with TelegramClient(
+                  StringSession(session), 
+                  api_id, 
+                  api_hash,
+                  # 📱 你的设备型号 (一加 13)
+                  device_model="OnePlus 13", 
+                  # 🤖 你的系统版本 (Android 16 / ColorOS 16)
+                  system_version="Android 16", 
+                  # 🚀 你的 TG 客户端版本 (保持和你手机一致)
+                  app_version="12.3.1",
+                  # 🇨🇳 语言设置 (和截图一致)
+                  lang_code="zh",
+                  system_lang_code="zh-CN"
+              ) as client:
+                  
                   # --- 防封机制 1：全局拟人化赖床 ---
-                  # 脚本启动后，随机“发呆” 1分钟 ~ 10分钟
-                  # 让每天的实际签到时间在 08:30 ~ 08:50 之间浮动，不像机器准点打卡
+                  # 随机发呆 1~10 分钟，打破准点规律
                   global_delay = random.randint(60, 600)
                   print(f"😪 【拟人化】刚醒，先发呆 {global_delay} 秒再开始干活...")
                   await asyncio.sleep(global_delay)
                   
                   # --- 防封机制 2：彻底乱序执行 ---
-                  # 每天签到的先后顺序都不一样，打破“机械化”特征
-                  # 就算 Lily 服主查日志，也找不到固定的执行路径
                   random.shuffle(configs)
                   print(f"🔀 今日签到顺序已随机打乱，老司机准备发车...")
 
                   for item in configs:
                       try:
-                          # --- 防封机制 3：模拟切换窗口 (优化版) ---
-                          # 15~50秒：模拟真人在聊天列表中翻找下一个机器人的时间
-                          # 兼顾了效率与真人随机性，欺骗管理员你是“慢慢操作的活人”
+                          # --- 防封机制 3：模拟切换窗口 (15~50秒) ---
                           wait_time = random.randint(15, 50) 
                           print(f"⏳ 切换到 {item['peer']}，等待 {wait_time} 秒...")
                           await asyncio.sleep(wait_time)
@@ -74,8 +83,7 @@ jobs:
                           
                           # --- 防封机制 4：拟人化视觉反应 ---
                           if item.get('button'):
-                              # 1. 视觉延迟：等待机器人回复 + 眼睛识别按钮 (2~5秒)
-                              # 拒绝“秒回”，模拟熟练工看到面板弹出后的自然反应
+                              # 视觉延迟：2~5秒 (模拟眼睛寻找按钮)
                               reaction_time = random.randint(2, 5)
                               print(f"👀 等待面板弹出... ({reaction_time} 秒)")
                               await asyncio.sleep(reaction_time)
@@ -86,8 +94,7 @@ jobs:
                                       for row in bot_msg.buttons:
                                           for btn in row:
                                               if item['button'] in btn.text:
-                                                  # 2. 触觉延迟：肌肉记忆点击 (0.3~0.8秒)
-                                                  # 模拟手指按下去的物理时间
+                                                  # 触觉延迟：0.3~0.8秒 (模拟手指点击)
                                                   await asyncio.sleep(random.uniform(0.3, 0.8))
                                                   await btn.click()
                                                   print(f"✅ 极速点击：[{btn.text}]")
