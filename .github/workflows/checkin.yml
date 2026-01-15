@@ -2,8 +2,10 @@ name: Telegram Auto Checkin
 
 on:
   schedule:
-    # 每天北京时间 04:30 启动 (UTC 20:30)
-    - cron: '30 20 * * *'
+    # ⚠️ 黄金时间：北京时间 08:30 启动
+    # (UTC 00:30 + 8小时 = 08:30)
+    # 避开 0点脚本高峰，避开 3点维护期，混入早高峰真人流量
+    - cron: '30 0 * * *'
   workflow_dispatch:
 
 jobs:
@@ -16,8 +18,6 @@ jobs:
       - name: Set up Python
         uses: actions/setup-python@v5
         with:
-          # 👇 之前是 python_version (下划线)，现在改成了 python-version (减号)
-          # 这样就不会有黄色叹号警告了
           python-version: '3.10'
 
       - name: Install dependencies
@@ -46,39 +46,48 @@ jobs:
                   return
 
               async with TelegramClient(StringSession(session), api_id, api_hash) as client:
-                  # --- 1. 全局拟人化等待 (睡懒觉) ---
-                  # 脚本启动后，随机发呆 10秒 ~ 15分钟
-                  global_delay = random.randint(10, 900)
-                  print(f"😪 【拟人化】脚本决定先睡个懒觉，{global_delay} 秒后再开始工作...")
+                  # --- 防封机制 1：全局拟人化赖床 ---
+                  # 脚本启动后，随机“发呆” 1分钟 ~ 10分钟
+                  # 让每天的实际签到时间在 08:30 ~ 08:50 之间浮动
+                  global_delay = random.randint(60, 600)
+                  print(f"😪 【拟人化】刚醒，先发呆 {global_delay} 秒再开始干活...")
                   await asyncio.sleep(global_delay)
-                  print(f"⏰ 睡醒了！现在开始执行签到任务...")
+                  
+                  # --- 防封机制 2：彻底乱序执行 ---
+                  # 每天签到的先后顺序都不一样，打破“机械化”特征
+                  random.shuffle(configs)
+                  print(f"🔀 今日签到顺序已随机打乱，老司机准备发车...")
 
                   for item in configs:
                       try:
-                          # --- 2. 内部队列等待 ---
-                          if item.get('priority') == True:
-                              print(f"【优先执行】Bot {item['peer']} 立即签到！")
-                          else:
-                              wait_time = random.randint(10, 120)
-                              print(f"【队列等待】{item['peer']} 随机等待 {wait_time} 秒...")
-                              await asyncio.sleep(wait_time)
+                          # --- 防封机制 3：模拟切换窗口 ---
+                          # 从一个机器人切到另一个，随机间隔 20~60 秒
+                          wait_time = random.randint(20, 60) 
+                          print(f"⏳ 切换到 {item['peer']}，等待 {wait_time} 秒...")
+                          await asyncio.sleep(wait_time)
                           
-                          # --- 3. 发送指令 ---
+                          # --- 发送指令 ---
                           print(f"向 {item['peer']} 发送: {item['message']}")
                           await client.send_message(item['peer'], item['message'])
                           
-                          # --- 4. 智能按钮点击 (搜最近3条) ---
+                          # --- 防封机制 4：拟人化视觉反应 ---
                           if item.get('button'):
-                              print(f"正在寻找包含 [{item['button']}] 的按钮...")
-                              await asyncio.sleep(8)
+                              # 1. 视觉延迟：等待机器人回复 + 眼睛识别按钮 (2~5秒)
+                              # 既确保网络加载完成，又符合“熟练工”的反应速度
+                              reaction_time = random.randint(2, 5)
+                              print(f"👀 等待面板弹出... ({reaction_time} 秒)")
+                              await asyncio.sleep(reaction_time)
+                              
                               found = False
                               async for bot_msg in client.iter_messages(item['peer'], limit=3):
                                   if bot_msg.buttons:
                                       for row in bot_msg.buttons:
                                           for btn in row:
                                               if item['button'] in btn.text:
+                                                  # 2. 触觉延迟：肌肉记忆点击 (0.3~0.8秒)
+                                                  await asyncio.sleep(random.uniform(0.3, 0.8))
                                                   await btn.click()
-                                                  print(f"✅ 成功点击按钮：[{btn.text}]")
+                                                  print(f"✅ 极速点击：[{btn.text}]")
                                                   found = True
                                                   break
                                           if found: break
