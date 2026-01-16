@@ -36,7 +36,7 @@ jobs:
           from telethon.sessions import StringSession
           from email.mime.text import MIMEText
           from email.header import Header
-          from email.utils import formataddr  # 👈 核心修复工具
+          from email.utils import formataddr  # 👈 核心修复工具：官方标准发信格式
 
           # --- 配置区 ---
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
@@ -61,7 +61,11 @@ jobs:
               try:
                   mail_user = os.environ.get('MAIL_USER')
                   mail_pass = os.environ.get('MAIL_PASS')
-                  if not mail_user or not mail_pass: return
+                  
+                  # ⚠️ 检查点：如果没有配置邮箱，直接在日志里提示，不再静默跳过
+                  if not mail_user or not mail_pass:
+                      print("⚠️ 警告：未配置 MAIL_USER 或 MAIL_PASS，无法发送邮件！")
+                      return
 
                   log_html = "<br>".join(execution_log)
                   today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
@@ -111,13 +115,12 @@ jobs:
 
                   message = MIMEText(html_content, 'html', 'utf-8')
                   
-                  # 🛠️ 终极修复：使用 formataddr 标准化发件人格式
-                  # 这会自动处理编码和格式，彻底解决 QQ 邮箱 550 错误
+                  # 🛠️ V4.11 核心修复：使用 formataddr 构造标准 RFC 发件头
+                  # 这能彻底解决 QQ 邮箱 "550 The 'From' header is missing or invalid" 错误
+                  # 也会大大降低进入垃圾箱的概率
                   message['From'] = formataddr(("Lily签到管家", mail_user))
                   
                   message['To'] = Header("Master", 'utf-8')
-                  
-                  # 👑 标题区分点：大号专用标题
                   message['Subject'] = Header(f"Telegram每日战报 🍷 | 尊贵的本体：今日份的“赛博贡品”已入库", 'utf-8')
 
                   smtpObj = smtplib.SMTP_SSL('smtp.qq.com', 465)
@@ -135,6 +138,7 @@ jobs:
                   session = os.environ['SESSION']
                   configs = json.loads(os.environ['CHECK_IN_CONFIG'])
               except Exception as e:
+                  print(f"❌ 启动失败，请检查 Secrets 配置: {e}")
                   return
 
               # 🛡️ 1:1 还原真实设备 (OnePlus 13)
@@ -159,6 +163,7 @@ jobs:
                           print(f"⏳ 切换会话: {item['peer']} (Wait: {wait_time}s)")
                           await asyncio.sleep(wait_time)
                           
+                          # 判断是否是指令签到（无按钮）
                           await client.send_message(item['peer'], item['message'])
                           
                           if item.get('button'):
