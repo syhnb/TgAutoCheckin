@@ -5,6 +5,12 @@ on:
     # 每天 UTC 23,0,1,2 点 (对应北京 7,8,9,10 点) 的第 5 分钟尝试运行
     - cron: '5 23,0,1,2 * * *'
   workflow_dispatch:
+    inputs:
+      force_run:
+        description: '强制运行 (无视吉时)'
+        required: false
+        type: boolean
+        default: false
 
 jobs:
   build:
@@ -29,6 +35,7 @@ jobs:
           CHECK_IN_CONFIG: ${{ secrets.CHECK_IN_CONFIG }}
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_PASS: ${{ secrets.MAIL_PASS }}
+          FORCE_RUN: ${{ inputs.force_run }}
         run: |
           cat << 'EOF' > run_checkin.py
           import asyncio, json, os, random, re, datetime, smtplib, time
@@ -42,7 +49,7 @@ jobs:
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
           DANGER_KEYWORDS = ["验证码", "captcha", "verification", "封禁", "ban", "异常", "人工"]
           
-          # ⭐ 重点关注对象 (你想在邮件里置顶显示的机器人ID)
+          # ⭐ 重点关注对象
           FOCUS_PEER = "@lilyembybot"
 
           execution_log = []
@@ -70,7 +77,7 @@ jobs:
                   log_html = "<br>".join(execution_log)
                   today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
                   
-                  # 🔍 特写逻辑：扫描日志寻找 Lily 的下落
+                  # 🔍 特写逻辑
                   focus_status = "❓ 未执行/未找到"
                   focus_color = "#95a5a6" # 灰色
                   focus_bg = "#f3f4f6"
@@ -85,7 +92,7 @@ jobs:
                               focus_status = "❌ 签到失败"
                               focus_color = "#c62828" # 红色
                               focus_bg = "#ffebee"
-                          break # 找到最近的一条状态就停止
+                          break
 
                   # 👑 大号文案
                   flavor_text = "🤖 尊贵的本体：任务已完成。"
@@ -127,7 +134,6 @@ jobs:
                   message = MIMEText(html_content, 'html', 'utf-8')
                   message['From'] = formataddr(("Telegram管家", mail_user))
                   message['To'] = Header("Master", 'utf-8')
-                  # 标题带上 Lily 的状态
                   subject_icon = "✅" if "成功" in focus_status else "❌"
                   message['Subject'] = Header(f"TG战报 🍷 | {subject_icon} Lily | 总计:{success_count}/{success_count+fail_count}", 'utf-8')
 
@@ -149,7 +155,7 @@ jobs:
                   print(f"❌ 配置读取失败: {e}")
                   return
 
-              # =========== 🛡️ V4.17 核心：每日彩票 + 全时段漫游 ===========
+              # =========== 🛡️ 核心：每日彩票 + 强制运行开关 ===========
               utc_now = datetime.datetime.utcnow()
               cst_now = utc_now + datetime.timedelta(hours=8)
               current_hour = cst_now.hour
@@ -163,9 +169,15 @@ jobs:
               
               print(f"📅 日期: {today_str} | 🎰 今日吉时: {target_hour}点 | ⌚ 当前: {current_hour}点")
 
-              if current_hour != target_hour:
-                  print(f"💤 还没到点，继续潜伏... (Exit)")
+              # 获取外部强制开关
+              is_force = os.environ.get('FORCE_RUN') == 'true'
+
+              if current_hour != target_hour and not is_force:
+                  print(f"💤 还没到点 ({target_hour}点)，且未开启强制模式，继续潜伏... (Exit)")
                   return
+              
+              if is_force:
+                  print(f"🔥 检测到强制运行模式！无视吉时限制，准备发射！")
 
               real_delay = random.randint(60, 3000)
               expected_time = cst_now + datetime.timedelta(seconds=real_delay)
@@ -216,7 +228,6 @@ jobs:
                                                       if clean_text(fallback) in btn_clean: is_match = True; break
                                               
                                               if is_match:
-                                                  # 拟人点击
                                                   await client.send_read_acknowledge(item['peer'], message=bot_msg)
                                                   reaction_time = random.uniform(1.5, 4.0)
                                                   print(f"👀 发现按钮，手指移动中... ({reaction_time:.2f}s)")
