@@ -3,7 +3,6 @@ name: Telegram Auto Checkin (Main)
 on:
   schedule:
     # 每天 UTC 23,0,1,2 点 (对应北京 7,8,9,10 点) 的第 5 分钟尝试运行
-    # 配合脚本内的 0-50分钟延迟，实现 7:05 ~ 11:00 全时段覆盖
     - cron: '5 23,0,1,2 * * *'
   workflow_dispatch:
 
@@ -43,6 +42,9 @@ jobs:
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
           DANGER_KEYWORDS = ["验证码", "captcha", "verification", "封禁", "ban", "异常", "人工"]
           
+          # ⭐ 重点关注对象 (你想在邮件里置顶显示的机器人ID)
+          FOCUS_PEER = "@lilyembybot"
+
           execution_log = []
           success_count = 0
           fail_count = 0
@@ -68,27 +70,54 @@ jobs:
                   log_html = "<br>".join(execution_log)
                   today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
                   
-                  # 👑 大号专属文案
-                  flavor_text = "🤖 尊贵的本体：今日份的羊毛已收割入库。"
+                  # 🔍 特写逻辑：扫描日志寻找 Lily 的下落
+                  focus_status = "❓ 未执行/未找到"
+                  focus_color = "#95a5a6" # 灰色
+                  focus_bg = "#f3f4f6"
+                  
+                  for line in execution_log:
+                      if FOCUS_PEER in line:
+                          if "✅" in line:
+                              focus_status = "✅ 签到成功"
+                              focus_color = "#2e7d32" # 绿色
+                              focus_bg = "#e8f5e9"
+                          elif "❌" in line or "⚠️" in line:
+                              focus_status = "❌ 签到失败"
+                              focus_color = "#c62828" # 红色
+                              focus_bg = "#ffebee"
+                          break # 找到最近的一条状态就停止
+
+                  # 👑 大号文案
+                  flavor_text = "🤖 尊贵的本体：任务已完成。"
                   if fail_count > 0:
-                      flavor_text += f" ⚠️ 注意：有 {fail_count} 个任务未成功，请检查日志。"
+                      flavor_text += f" 注意：有 {fail_count} 个失败。"
 
                   html_content = f"""
-                  <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px;">
+                  <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
                       <div style="background: #2c3e50; padding: 20px; text-align: center; color: #fff;">
                           <h2 style="margin:0;">📅 每日战报 ({today})</h2>
                       </div>
-                      <div style="padding: 20px;">
-                          <p style="color: #34495e; font-size: 14px;">{flavor_text}</p>
-                          <div style="display: flex; gap: 10px; margin: 20px 0;">
-                              <div style="flex:1; background:#e8f5e9; padding:10px; text-align:center; border-radius:4px; color:#2e7d32;">
-                                  ✅ 成功: <strong>{success_count}</strong>
-                              </div>
-                              <div style="flex:1; background:#ffebee; padding:10px; text-align:center; border-radius:4px; color:#c62828;">
-                                  ❌ 失败: <strong>{fail_count}</strong>
+                      
+                      <div style="background: {focus_bg}; padding: 15px 20px; border-bottom: 1px solid #e0e0e0; display: flex; align-items: center; justify-content: space-between;">
+                          <div>
+                              <span style="font-size: 12px; color: #7f8c8d; font-weight: bold; text-transform: uppercase;">重点关注 ({FOCUS_PEER})</span>
+                              <div style="font-size: 24px; font-weight: bold; color: {focus_color}; margin-top: 5px;">
+                                  {focus_status}
                               </div>
                           </div>
-                          <div style="background:#f5f5f5; padding:15px; font-size:12px; font-family:monospace; height:300px; overflow-y:auto; border-radius:4px;">
+                          <div style="font-size: 30px;">🐱</div>
+                      </div>
+                      <div style="padding: 20px;">
+                          <p style="color: #34495e; font-size: 14px; margin-top: 0;">{flavor_text}</p>
+                          <div style="display: flex; gap: 10px; margin: 20px 0;">
+                              <div style="flex:1; background:#f1f8e9; padding:10px; text-align:center; border-radius:4px; color:#2e7d32;">
+                                  ✅ 总成功: <strong>{success_count}</strong>
+                              </div>
+                              <div style="flex:1; background:#ffebee; padding:10px; text-align:center; border-radius:4px; color:#c62828;">
+                                  ❌ 总失败: <strong>{fail_count}</strong>
+                              </div>
+                          </div>
+                          <div style="background:#f8f9fa; padding:15px; font-size:12px; font-family:monospace; height:300px; overflow-y:auto; border-radius:4px; border: 1px solid #eee;">
                               {log_html}
                           </div>
                       </div>
@@ -98,8 +127,9 @@ jobs:
                   message = MIMEText(html_content, 'html', 'utf-8')
                   message['From'] = formataddr(("Telegram管家", mail_user))
                   message['To'] = Header("Master", 'utf-8')
-                  # 👑 大号邮件标题
-                  message['Subject'] = Header(f"TG战报 🍷 | 本体 | ✅{success_count} ❌{fail_count}", 'utf-8')
+                  # 标题带上 Lily 的状态
+                  subject_icon = "✅" if "成功" in focus_status else "❌"
+                  message['Subject'] = Header(f"TG战报 🍷 | {subject_icon} Lily | 总计:{success_count}/{success_count+fail_count}", 'utf-8')
 
                   smtpObj = smtplib.SMTP_SSL('smtp.qq.com', 465)
                   smtpObj.login(mail_user, mail_pass)
@@ -125,25 +155,18 @@ jobs:
               current_hour = cst_now.hour
               today_str = cst_now.strftime('%Y%m%d')
               
-              # 1. 锁定随机种子
               random.seed(today_str)
-              
-              # 2. 每日抽签 (7,8,9,10点)
               candidate_hours = [7, 8, 9, 10]
               weights = [20, 35, 30, 15]
               target_hour = random.choices(candidate_hours, weights=weights, k=1)[0]
-              
-              # 3. 🔓 解锁随机种子 (恢复真随机)
               random.seed()
               
               print(f"📅 日期: {today_str} | 🎰 今日吉时: {target_hour}点 | ⌚ 当前: {current_hour}点")
 
-              # 4. 守门员
               if current_hour != target_hour:
                   print(f"💤 还没到点，继续潜伏... (Exit)")
                   return
 
-              # 5. 漫游延迟 (0-50分钟)
               real_delay = random.randint(60, 3000)
               expected_time = cst_now + datetime.timedelta(seconds=real_delay)
               print(f"⏰ 吉时已到！启动漫游模式... (延迟 {real_delay//60} 分钟)")
@@ -157,7 +180,6 @@ jobs:
                   
                   log("🚀 System Online")
 
-                  # 🛡️ 暖场动作：模拟打开App加载列表
                   print("👀 正在加载对话列表...")
                   await client.get_dialogs(limit=random.randint(5, 10))
                   await asyncio.sleep(random.randint(2, 5))
@@ -194,9 +216,8 @@ jobs:
                                                       if clean_text(fallback) in btn_clean: is_match = True; break
                                               
                                               if is_match:
-                                                  # 🛡️ 核心：拟人化点击
+                                                  # 拟人点击
                                                   await client.send_read_acknowledge(item['peer'], message=bot_msg)
-                                                  
                                                   reaction_time = random.uniform(1.5, 4.0)
                                                   print(f"👀 发现按钮，手指移动中... ({reaction_time:.2f}s)")
                                                   await asyncio.sleep(reaction_time)
