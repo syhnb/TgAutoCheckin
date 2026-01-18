@@ -2,8 +2,9 @@ name: Telegram Auto Checkin (Main)
 
 on:
   schedule:
-    # 每天 UTC 23,0,1,2 点 (对应北京 7,8,9,10 点) 的第 5 分钟尝试运行
-    - cron: '5 23,0,1,2 * * *'
+    # ✅ 修复了 Cron 语法错误：不能写 23-3，要分开写
+    # 北京时间 7, 8, 9, 10, 11 点整唤醒
+    - cron: '5 23,0-3 * * *'
   workflow_dispatch:
     inputs:
       force_run:
@@ -45,16 +46,18 @@ jobs:
           from email.header import Header
           from email.utils import formataddr
 
-          # --- 配置区 ---
+          # --- 基础配置 ---
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
           DANGER_KEYWORDS = ["验证码", "captcha", "verification", "封禁", "ban", "异常", "人工"]
+          SUCCESS_KEYWORDS = ["成功", "获得", "Success", "earned", "Credit", "金币", "已签到", "already"]
           
-          # ⭐ 重点关注对象
+          # ⭐ 重点关注对象 (UI特写用)
           FOCUS_PEER = "@lilyembybot"
 
           execution_log = []
           success_count = 0
           fail_count = 0
+          skip_count = 0
 
           def clean_text(text):
               return re.sub(r'[^\w\u4e00-\u9fff]+', '', text).lower()
@@ -67,38 +70,49 @@ jobs:
               execution_log.append(f"[{timestamp}] {message}")
 
           def send_email_report():
+              # 🔇 静默模式：如果任务是“前置侦查跳过”的，且没有任何失败，则不发邮件
+              # 但如果你喜欢每天都看一眼战报，可以注释掉下面这两行
+              if success_count == 0 and fail_count == 0 and skip_count > 0:
+                  print("✨ [前置侦查] 任务已完成，静默退出。")
+                  return
+
               try:
                   mail_user = os.environ.get('MAIL_USER')
                   mail_pass = os.environ.get('MAIL_PASS')
                   if not mail_user or not mail_pass:
-                      print("⚠️ 警告：未配置邮箱，跳过发送。")
                       return
 
                   log_html = "<br>".join(execution_log)
                   today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
                   
-                  # 🔍 特写逻辑
+                  # 🎨 UI 还原：Focus Card 逻辑
                   focus_status = "❓ 未执行/未找到"
                   focus_color = "#95a5a6" # 灰色
                   focus_bg = "#f3f4f6"
                   
+                  # 扫描日志确定 Lily 的状态
+                  found_focus = False
                   for line in execution_log:
                       if FOCUS_PEER in line:
-                          if "✅" in line:
+                          found_focus = True
+                          if "✅" in line or "成功" in line:
                               focus_status = "✅ 签到成功"
                               focus_color = "#2e7d32" # 绿色
                               focus_bg = "#e8f5e9"
-                          elif "❌" in line or "⚠️" in line:
+                          elif "⏭️" in line:
+                              focus_status = "💤 今日已签 (跳过)"
+                              focus_color = "#1565c0" # 蓝色
+                              focus_bg = "#e3f2fd"
+                          elif "❌" in line:
                               focus_status = "❌ 签到失败"
                               focus_color = "#c62828" # 红色
                               focus_bg = "#ffebee"
                           break
+                  
+                  if not found_focus:
+                      focus_status = "⚠️ 未检测到运行"
 
-                  # 👑 大号文案
-                  flavor_text = "🤖 尊贵的本体：任务已完成。"
-                  if fail_count > 0:
-                      flavor_text += f" 注意：有 {fail_count} 个失败。"
-
+                  # 📧 邮件 HTML (还原你喜欢的卡片风格)
                   html_content = f"""
                   <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
                       <div style="background: #2c3e50; padding: 20px; text-align: center; color: #fff;">
@@ -114,16 +128,19 @@ jobs:
                           </div>
                           <div style="font-size: 30px;">🐱</div>
                       </div>
+
                       <div style="padding: 20px;">
-                          <p style="color: #34495e; font-size: 14px; margin-top: 0;">{flavor_text}</p>
+                          <p style="color: #34495e; font-size: 14px; margin-top: 0;">🤖 尊贵的本体：任务汇报如下。</p>
+                          
                           <div style="display: flex; gap: 10px; margin: 20px 0;">
-                              <div style="flex:1; background:#f1f8e9; padding:10px; text-align:center; border-radius:4px; color:#2e7d32;">
-                                  ✅ 总成功: <strong>{success_count}</strong>
+                              <div style="flex:1; background:#e8f5e9; padding:15px; text-align:center; border-radius:6px; color:#2e7d32; font-weight:bold; font-size:16px;">
+                                  ✅ 总成功: {success_count}
                               </div>
-                              <div style="flex:1; background:#ffebee; padding:10px; text-align:center; border-radius:4px; color:#c62828;">
-                                  ❌ 总失败: <strong>{fail_count}</strong>
+                              <div style="flex:1; background:#ffebee; padding:15px; text-align:center; border-radius:6px; color:#c62828; font-weight:bold; font-size:16px;">
+                                  ❌ 总失败: {fail_count}
                               </div>
                           </div>
+                          
                           <div style="background:#f8f9fa; padding:15px; font-size:12px; font-family:monospace; height:300px; overflow-y:auto; border-radius:4px; border: 1px solid #eee;">
                               {log_html}
                           </div>
@@ -134,8 +151,12 @@ jobs:
                   message = MIMEText(html_content, 'html', 'utf-8')
                   message['From'] = formataddr(("Telegram管家", mail_user))
                   message['To'] = Header("Master", 'utf-8')
-                  subject_icon = "✅" if "成功" in focus_status else "❌"
-                  message['Subject'] = Header(f"TG战报 🍷 | {subject_icon} Lily | 总计:{success_count}/{success_count+fail_count}", 'utf-8')
+                  
+                  # 标题
+                  status_icon = "✅" if fail_count == 0 else "⚠️"
+                  if success_count == 0 and skip_count > 0: status_icon = "💤"
+                  
+                  message['Subject'] = Header(f"TG战报 (大号) 🍷 | {status_icon} Lily | 总计:{success_count+skip_count}/{success_count+skip_count+fail_count}", 'utf-8')
 
                   smtpObj = smtplib.SMTP_SSL('smtp.qq.com', 465)
                   smtpObj.login(mail_user, mail_pass)
@@ -145,7 +166,7 @@ jobs:
                   print(f"❌ 邮件失败: {e}")
 
           async def main():
-              global success_count, fail_count
+              global success_count, fail_count, skip_count
               try:
                   api_id = int(os.environ['API_ID'])
                   api_hash = os.environ['API_HASH']
@@ -155,102 +176,134 @@ jobs:
                   print(f"❌ 配置读取失败: {e}")
                   return
 
-              # =========== 🛡️ 核心：每日彩票 + 强制运行开关 ===========
+              # =========== ⚡ V4.31: 加权拟人 + 前置侦查 + 11点死命令 ===========
               utc_now = datetime.datetime.utcnow()
               cst_now = utc_now + datetime.timedelta(hours=8)
               current_hour = cst_now.hour
               today_str = cst_now.strftime('%Y%m%d')
+              weekday = cst_now.weekday()
               
+              # 1. 算出今天的吉时 (加权算法)
               random.seed(today_str)
-              candidate_hours = [7, 8, 9, 10]
-              weights = [20, 35, 30, 15]
-              target_hour = random.choices(candidate_hours, weights=weights, k=1)[0]
+              candidates = [7, 8, 9, 10]
+              if weekday <= 4: # 周一至周五
+                  weights = [30, 40, 20, 10]
+              else:            # 周末
+                  weights = [10, 10, 40, 40]
+              target_hour = random.choices(candidates, weights=weights, k=1)[0]
               random.seed()
-              
-              print(f"📅 日期: {today_str} | 🎰 今日吉时: {target_hour}点 | ⌚ 当前: {current_hour}点")
 
-              # 获取外部强制开关
+              print(f"📅 日期: {today_str} | ⌚ 当前: {current_hour}点")
+              print(f"🎰 命中吉时: {target_hour}点 (11点为强制兜底)")
+              
               is_force = os.environ.get('FORCE_RUN') == 'true'
 
-              if current_hour != target_hour and not is_force:
-                  print(f"💤 还没到点 ({target_hour}点)，且未开启强制模式，继续潜伏... (Exit)")
-                  return
-              
-              if is_force:
-                  print(f"🔥 检测到强制运行模式！无视吉时限制，准备发射！")
-
-              real_delay = random.randint(60, 3000)
-              expected_time = cst_now + datetime.timedelta(seconds=real_delay)
-              print(f"⏰ 吉时已到！启动漫游模式... (延迟 {real_delay//60} 分钟)")
-              print(f"🎯 预计执行时间: {expected_time.strftime('%H:%M:%S')}")
-              
-              await asyncio.sleep(real_delay)
-
-              # =========== 🚀 开始执行 ===========
-              
               async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus 13", system_version="Android 16", app_version="12.3.1", lang_code="zh", system_lang_code="zh-CN") as client:
+                  log("🔍 前置雷达启动...")
                   
-                  log("🚀 System Online")
-
-                  print("👀 正在加载对话列表...")
-                  await client.get_dialogs(limit=random.randint(5, 10))
-                  await asyncio.sleep(random.randint(2, 5))
-
+                  # --- 第一步：全局侦查 (熔断机制) ---
+                  # 无论几点醒来，先看一眼是不是签过了。签过了就直接跑路。
+                  all_done = True
                   random.shuffle(configs)
 
                   for item in configs:
+                      peer = item['peer']
+                      has_signed = False
                       try:
-                          wait_time = random.randint(10, 20)
-                          print(f"⏳ 切换会话: {item['peer']} (Wait: {wait_time}s)")
-                          await asyncio.sleep(wait_time)
+                          async for message in client.iter_messages(peer, limit=5):
+                              msg_date_cst = message.date + datetime.timedelta(hours=8)
+                              if msg_date_cst.strftime('%Y%m%d') == today_str:
+                                  text = message.text or ""
+                                  if any(k in text for k in SUCCESS_KEYWORDS):
+                                      has_signed = True
+                                      break
+                      except: pass
+                      
+                      if not has_signed:
+                          all_done = False
+                          break
+                  
+                  # ✨ 核心：如果全签了，直接下班！
+                  if all_done and not is_force:
+                      log("✨ [前置侦查] 检测到任务已完成！停止运行。")
+                      skip_count += len(configs)
+                      send_email_report()
+                      return 
+
+                  # --- 第二步：准入判断 ---
+                  is_last_call = (current_hour == 11)
+
+                  if current_hour != target_hour and not is_last_call and not is_force:
+                      print(f"💤 尚未完成，但当前非吉时 ({target_hour}点)，暂不行动... (Exit)")
+                      return
+
+                  # --- 第三步：挂机潜伏 ---
+                  if is_last_call:
+                       wait_seconds = random.randint(10, 120) # 11点兜底，快一点
+                       print(f"🚨 启动11点强制兜底... (等待 {wait_seconds}s)")
+                  else:
+                       wait_seconds = random.randint(60, 2700) # 吉时，慢一点模拟真人
+                       print(f"🎯 启动日常签到... (在线挂机 {wait_seconds//60} 分钟)")
+                  
+                  await asyncio.sleep(wait_seconds)
+
+                  # --- 第四步：执行补漏 ---
+                  log("⚡ 开始执行任务...")
+                  for item in configs:
+                      try:
+                          peer = item['peer']
+                          # 再查一次 (双重保险)
+                          already_signed = False
+                          async for message in client.iter_messages(peer, limit=5):
+                              msg_date_cst = message.date + datetime.timedelta(hours=8)
+                              if msg_date_cst.strftime('%Y%m%d') == today_str:
+                                  text = message.text or ""
+                                  if any(k in text for k in SUCCESS_KEYWORDS):
+                                      already_signed = True
+                                      break
                           
-                          await client.send_message(item['peer'], item['message'])
+                          if already_signed:
+                              success_count += 1
+                              continue
+
+                          # 发送指令
+                          wait_action = random.randint(5, 15)
+                          await asyncio.sleep(wait_action)
+                          await client.send_message(peer, item['message'])
                           
+                          # 按钮逻辑
                           if item.get('button'):
-                              await asyncio.sleep(random.randint(2, 5))
+                              await asyncio.sleep(random.randint(3, 6))
                               found = False
-                              async for bot_msg in client.iter_messages(item['peer'], limit=3):
+                              async for bot_msg in client.iter_messages(peer, limit=3):
                                   if bot_msg.text:
                                       for danger in DANGER_KEYWORDS:
                                           if danger in bot_msg.text.lower():
-                                              log(f"💥 发现敏感词 [{danger}]，跳过！")
-                                              send_email_report()
-                                              return 
-
+                                              log(f"💥 敏感词 [{danger}]，跳过")
+                                              break
                                   if bot_msg.buttons:
                                       for row in bot_msg.buttons:
                                           for btn in row:
-                                              btn_clean = clean_text(btn.text)
-                                              target_clean = clean_text(item['button'])
-                                              is_match = target_clean in btn_clean
-                                              if not is_match:
-                                                  for fallback in FALLBACK_KEYWORDS:
-                                                      if clean_text(fallback) in btn_clean: is_match = True; break
-                                              
-                                              if is_match:
-                                                  await client.send_read_acknowledge(item['peer'], message=bot_msg)
-                                                  reaction_time = random.uniform(1.5, 4.0)
-                                                  print(f"👀 发现按钮，手指移动中... ({reaction_time:.2f}s)")
-                                                  await asyncio.sleep(reaction_time)
-                                                  
+                                              if clean_text(item['button']) in clean_text(btn.text) or any(clean_text(k) in clean_text(btn.text) for k in FALLBACK_KEYWORDS):
+                                                  await client.send_read_acknowledge(peer, message=bot_msg)
+                                                  await asyncio.sleep(random.uniform(1.5, 4.0))
                                                   await btn.click()
-                                                  log(f"✅ {item['peer']}：已点击 [{btn.text}]")
+                                                  log(f"✅ {peer}：点击 [{btn.text}]")
                                                   found = True
                                                   success_count += 1
                                                   break
                                           if found: break
                                   if found: break
-                              if not found:
-                                  log(f"⚠️ {item['peer']}：未找到按钮")
-                                  fail_count += 1
+                              if not found: log(f"⚠️ {peer}：未找到按钮")
                           else:
-                              log(f"✅ {item['peer']}：指令已发送")
+                              log(f"✅ {peer}：指令已发送")
                               success_count += 1
+
                       except Exception as e:
-                          log(f"❌ {item['peer']}：错误 - {str(e)}")
+                          log(f"❌ {peer}：错误 - {str(e)}")
                           fail_count += 1
 
-                  log("👋 所有任务结束，下线。")
+                  log("👋 任务结束。")
                   send_email_report()
 
           if __name__ == '__main__':
