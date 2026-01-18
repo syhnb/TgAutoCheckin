@@ -2,8 +2,7 @@ name: Telegram Auto Checkin (Main)
 
 on:
   schedule:
-    # ✅ 修复了 Cron 语法错误：不能写 23-3，要分开写
-    # 北京时间 7, 8, 9, 10, 11 点整唤醒
+    # ✅ 北京时间 7, 8, 9, 10, 11 点整唤醒
     - cron: '5 23,0-3 * * *'
   workflow_dispatch:
     inputs:
@@ -51,7 +50,7 @@ jobs:
           DANGER_KEYWORDS = ["验证码", "captcha", "verification", "封禁", "ban", "异常", "人工"]
           SUCCESS_KEYWORDS = ["成功", "获得", "Success", "earned", "Credit", "金币", "已签到", "already"]
           
-          # ⭐ 重点关注对象 (UI特写用)
+          # ⭐ 重点关注对象
           FOCUS_PEER = "@lilyembybot"
 
           execution_log = []
@@ -70,8 +69,7 @@ jobs:
               execution_log.append(f"[{timestamp}] {message}")
 
           def send_email_report():
-              # 🔇 静默模式：如果任务是“前置侦查跳过”的，且没有任何失败，则不发邮件
-              # 但如果你喜欢每天都看一眼战报，可以注释掉下面这两行
+              # 静默模式：如果任务是“前置侦查跳过”的，且没有任何失败，则不发邮件
               if success_count == 0 and fail_count == 0 and skip_count > 0:
                   print("✨ [前置侦查] 任务已完成，静默退出。")
                   return
@@ -85,34 +83,32 @@ jobs:
                   log_html = "<br>".join(execution_log)
                   today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
                   
-                  # 🎨 UI 还原：Focus Card 逻辑
+                  # 🎨 UI: Focus Card
                   focus_status = "❓ 未执行/未找到"
-                  focus_color = "#95a5a6" # 灰色
+                  focus_color = "#95a5a6"
                   focus_bg = "#f3f4f6"
                   
-                  # 扫描日志确定 Lily 的状态
                   found_focus = False
                   for line in execution_log:
                       if FOCUS_PEER in line:
                           found_focus = True
                           if "✅" in line or "成功" in line:
                               focus_status = "✅ 签到成功"
-                              focus_color = "#2e7d32" # 绿色
+                              focus_color = "#2e7d32"
                               focus_bg = "#e8f5e9"
                           elif "⏭️" in line:
                               focus_status = "💤 今日已签 (跳过)"
-                              focus_color = "#1565c0" # 蓝色
+                              focus_color = "#1565c0"
                               focus_bg = "#e3f2fd"
                           elif "❌" in line:
                               focus_status = "❌ 签到失败"
-                              focus_color = "#c62828" # 红色
+                              focus_color = "#c62828"
                               focus_bg = "#ffebee"
                           break
                   
                   if not found_focus:
                       focus_status = "⚠️ 未检测到运行"
 
-                  # 📧 邮件 HTML (还原你喜欢的卡片风格)
                   html_content = f"""
                   <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
                       <div style="background: #2c3e50; padding: 20px; text-align: center; color: #fff;">
@@ -152,11 +148,11 @@ jobs:
                   message['From'] = formataddr(("Telegram管家", mail_user))
                   message['To'] = Header("Master", 'utf-8')
                   
-                  # 标题
                   status_icon = "✅" if fail_count == 0 else "⚠️"
                   if success_count == 0 and skip_count > 0: status_icon = "💤"
                   
-                  message['Subject'] = Header(f"TG战报 (大号) 🍷 | {status_icon} Lily | 总计:{success_count+skip_count}/{success_count+skip_count+fail_count}", 'utf-8')
+                  # 📧 大号中文标题
+                  message['Subject'] = Header(f"TG战报 (大号) 🛡️ | {status_icon} Lily | 总计:{success_count+skip_count}/{success_count+skip_count+fail_count}", 'utf-8')
 
                   smtpObj = smtplib.SMTP_SSL('smtp.qq.com', 465)
                   smtpObj.login(mail_user, mail_pass)
@@ -176,14 +172,13 @@ jobs:
                   print(f"❌ 配置读取失败: {e}")
                   return
 
-              # =========== ⚡ V4.31: 加权拟人 + 前置侦查 + 11点死命令 ===========
+              # =========== ⚡ V4.32: 节能版 (wait max 15min) ===========
               utc_now = datetime.datetime.utcnow()
               cst_now = utc_now + datetime.timedelta(hours=8)
               current_hour = cst_now.hour
               today_str = cst_now.strftime('%Y%m%d')
               weekday = cst_now.weekday()
               
-              # 1. 算出今天的吉时 (加权算法)
               random.seed(today_str)
               candidates = [7, 8, 9, 10]
               if weekday <= 4: # 周一至周五
@@ -201,8 +196,6 @@ jobs:
               async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus 13", system_version="Android 16", app_version="12.3.1", lang_code="zh", system_lang_code="zh-CN") as client:
                   log("🔍 前置雷达启动...")
                   
-                  # --- 第一步：全局侦查 (熔断机制) ---
-                  # 无论几点醒来，先看一眼是不是签过了。签过了就直接跑路。
                   all_done = True
                   random.shuffle(configs)
 
@@ -223,36 +216,32 @@ jobs:
                           all_done = False
                           break
                   
-                  # ✨ 核心：如果全签了，直接下班！
                   if all_done and not is_force:
                       log("✨ [前置侦查] 检测到任务已完成！停止运行。")
                       skip_count += len(configs)
                       send_email_report()
                       return 
 
-                  # --- 第二步：准入判断 ---
                   is_last_call = (current_hour == 11)
 
                   if current_hour != target_hour and not is_last_call and not is_force:
                       print(f"💤 尚未完成，但当前非吉时 ({target_hour}点)，暂不行动... (Exit)")
                       return
 
-                  # --- 第三步：挂机潜伏 ---
+                  # ⚡ 改动点：潜伏时间优化为 1~15 分钟
                   if is_last_call:
-                       wait_seconds = random.randint(10, 120) # 11点兜底，快一点
+                       wait_seconds = random.randint(10, 120) 
                        print(f"🚨 启动11点强制兜底... (等待 {wait_seconds}s)")
                   else:
-                       wait_seconds = random.randint(60, 2700) # 吉时，慢一点模拟真人
+                       wait_seconds = random.randint(60, 900) # <--- 这里改了 (15分钟 max)
                        print(f"🎯 启动日常签到... (在线挂机 {wait_seconds//60} 分钟)")
                   
                   await asyncio.sleep(wait_seconds)
 
-                  # --- 第四步：执行补漏 ---
                   log("⚡ 开始执行任务...")
                   for item in configs:
                       try:
                           peer = item['peer']
-                          # 再查一次 (双重保险)
                           already_signed = False
                           async for message in client.iter_messages(peer, limit=5):
                               msg_date_cst = message.date + datetime.timedelta(hours=8)
@@ -266,12 +255,10 @@ jobs:
                               success_count += 1
                               continue
 
-                          # 发送指令
                           wait_action = random.randint(5, 15)
                           await asyncio.sleep(wait_action)
                           await client.send_message(peer, item['message'])
                           
-                          # 按钮逻辑
                           if item.get('button'):
                               await asyncio.sleep(random.randint(3, 6))
                               found = False
