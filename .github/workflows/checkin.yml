@@ -69,7 +69,7 @@ jobs:
               execution_log.append(f"[{timestamp}] {message}")
 
           def send_email_report():
-              # 静默模式：如果任务是“前置侦查跳过”的，且没有任何失败，则不发邮件
+              # 静默模式：如果全是跳过且无失败，不发邮件 (想看日报可以注释掉下面两行)
               if success_count == 0 and fail_count == 0 and skip_count > 0:
                   print("✨ [前置侦查] 任务已完成，静默退出。")
                   return
@@ -172,7 +172,7 @@ jobs:
                   print(f"❌ 配置读取失败: {e}")
                   return
 
-              # =========== ⚡ V4.32: 节能版 (wait max 15min) ===========
+              # =========== ⚡ V4.33: 延迟免疫版 ===========
               utc_now = datetime.datetime.utcnow()
               cst_now = utc_now + datetime.timedelta(hours=8)
               current_hour = cst_now.hour
@@ -222,18 +222,19 @@ jobs:
                       send_email_report()
                       return 
 
-                  is_last_call = (current_hour == 11)
+                  # ⚡ 关键修复：把 == 11 改为 >= 11，防止GitHub延迟导致漏跑
+                  is_last_call = (current_hour >= 11)
 
                   if current_hour != target_hour and not is_last_call and not is_force:
                       print(f"💤 尚未完成，但当前非吉时 ({target_hour}点)，暂不行动... (Exit)")
                       return
 
-                  # ⚡ 改动点：潜伏时间优化为 1~15 分钟
+                  # ⚡ 节能模式：潜伏 1~15 分钟
                   if is_last_call:
                        wait_seconds = random.randint(10, 120) 
                        print(f"🚨 启动11点强制兜底... (等待 {wait_seconds}s)")
                   else:
-                       wait_seconds = random.randint(60, 900) # <--- 这里改了 (15分钟 max)
+                       wait_seconds = random.randint(60, 900)
                        print(f"🎯 启动日常签到... (在线挂机 {wait_seconds//60} 分钟)")
                   
                   await asyncio.sleep(wait_seconds)
@@ -252,6 +253,8 @@ jobs:
                                       break
                           
                           if already_signed:
+                              # ⚡ 优化：让跳过也显示在日志里
+                              log(f"⏭️ {peer}: 检测到今日已签，跳过")
                               success_count += 1
                               continue
 
