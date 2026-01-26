@@ -86,7 +86,6 @@ jobs:
               
               issue_number = None
               try:
-                  # 1. 找账本
                   params = {"state": "open", "creator": "app/github-actions"}
                   resp = requests.get(api_url, headers=headers, params=params)
                   issues = resp.json()
@@ -96,7 +95,6 @@ jobs:
                           issue_number = issue['number']
                           break
                   
-                  # 2. 没账本就新建
                   if not issue_number:
                       log("📘 未找到账本，正在创建新的 GitHub Issue...")
                       create_data = {
@@ -110,7 +108,6 @@ jobs:
                           log(f"⚠️ 创建账本失败: {create_resp.text}")
                           return False, None
                   
-                  # 3. 查记录
                   comments_url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
                   comments_resp = requests.get(comments_url, headers=headers)
                   comments = comments_resp.json()
@@ -135,7 +132,6 @@ jobs:
               url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
               
               data = {"body": f"✅ {today_str} 任务已完成 ({AC_TAG})"}
-              
               try:
                   requests.post(url, headers=headers, json=data)
                   log(f"📘 已在 GitHub Issue 记录今日战绩")
@@ -151,39 +147,53 @@ jobs:
                   log_html = "<br>".join(execution_log)
                   today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
                   
-                  focus_status = "❓ 未执行/未找到"
-                  focus_color = "#95a5a6"
-                  focus_bg = "#f3f4f6"
+                  focus_status = "❌ 未检测到运行"
+                  focus_emoji = "⚠️"
                   found_focus = False
+                  
                   for line in execution_log:
                       if FOCUS_PEER in line:
                           found_focus = True
                           if "✅" in line or "成功" in line:
                               focus_status = "✅ 签到成功"
-                              focus_color = "#2e7d32"
-                              focus_bg = "#e8f5e9"
+                              focus_emoji = "🐱"
                           elif "❌" in line:
                               focus_status = "❌ 签到失败"
-                              focus_color = "#c62828"
-                              focus_bg = "#ffebee"
+                              focus_emoji = "😿"
                           break
-                  if not found_focus: focus_status = "⚠️ 未检测到运行"
+                  if not found_focus:
+                      focus_status = "⚠️ 无重点对象"
+                      focus_emoji = "❓"
 
+                  # 🎨 旧版经典 UI 还原
                   html_content = f"""
-                  <div style="font-family: sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden;">
-                      <div style="background: #2c3e50; padding: 20px; text-align: center; color: #fff;">
-                          <h2 style="margin:0;">📅 {today} 战报 ({AC_TAG})</h2>
+                  <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.05);">
+                      <div style="background: #34495e; padding: 15px 20px; text-align: left; color: #fff;">
+                          <h2 style="margin:0; font-size: 18px; font-weight: 500;">📅 每日战报 ({today})</h2>
                       </div>
-                      <div style="background: {focus_bg}; padding: 15px; display: flex; justify-content: space-between;">
-                          <div>
-                              <span style="font-size: 12px; color: #7f8c8d; font-weight: bold;">重点关注 ({FOCUS_PEER})</span>
-                              <div style="font-size: 24px; font-weight: bold; color: {focus_color};">{focus_status}</div>
+                      
+                      <div style="background: #f4f6f7; padding: 15px 20px; border-bottom: 1px solid #e0e0e0;">
+                          <div style="font-size: 12px; color: #7f8c8d; font-weight: bold; margin-bottom: 5px;">重点关注 ({FOCUS_PEER})</div>
+                          <div style="font-size: 20px; font-weight: bold; color: #2c3e50; display: flex; align-items: center;">
+                             <span style="margin-right: 8px;">{focus_emoji}</span> {focus_status}
                           </div>
-                          <div style="font-size: 30px;">🦁</div>
                       </div>
+
                       <div style="padding: 20px;">
-                          <p style="color: #34495e; font-size: 14px;">🤖 尊贵的本体：{AC_TAG} 任务已执行。</p>
-                          <div style="background:#f8f9fa; padding:15px; font-size:12px; font-family:monospace; height:300px; overflow-y:auto; border: 1px solid #eee;">{log_html}</div>
+                          <p style="color: #34495e; font-size: 14px; margin-top: 0;">🤖 尊贵的本体：{AC_TAG} 任务执行完毕。</p>
+                          
+                          <div style="display: flex; gap: 10px; margin: 15px 0;">
+                              <div style="flex:1; background:#e8f5e9; padding:10px; text-align:center; border-radius:4px; color:#2e7d32; font-weight:bold; font-size:14px;">
+                                  ✅ 总成功: {success_count}
+                              </div>
+                              <div style="flex:1; background:#ffebee; padding:10px; text-align:center; border-radius:4px; color:#c62828; font-weight:bold; font-size:14px;">
+                                  ❌ 总失败: {fail_count}
+                              </div>
+                          </div>
+                          
+                          <div style="background:#f8f9fa; padding:15px; font-size:12px; font-family: 'Courier New', monospace; height:320px; overflow-y:auto; border: 1px solid #eee; border-radius: 4px; line-height: 1.5;">
+                              {log_html}
+                          </div>
                       </div>
                   </div>
                   """
@@ -191,7 +201,7 @@ jobs:
                   message['From'] = formataddr(("Telegram管家", mail_user))
                   message['To'] = Header("Master", 'utf-8')
                   status_icon = "✅" if fail_count == 0 else "⚠️"
-                  message['Subject'] = Header(f"TG战报 ({AC_TAG}) 📘 | {status_icon} 完成:{success_count}", 'utf-8')
+                  message['Subject'] = Header(f"TG战报 ({AC_TAG}) | {status_icon} 完成:{success_count}", 'utf-8')
                   smtpObj = smtplib.SMTP_SSL('smtp.qq.com', 465)
                   smtpObj.login(mail_user, mail_pass)
                   smtpObj.sendmail(mail_user, [mail_user], message.as_string())
