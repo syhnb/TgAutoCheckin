@@ -2,8 +2,12 @@ name: Telegram Auto Checkin (Main)
 
 on:
   schedule:
-    # ✅ 北京时间 7, 8, 9, 10, 11 点整唤醒
-    - cron: '5 23,0-3 * * *'
+    # ✅ 错峰乱序定时
+    - cron: '12 23 * * *' # 07:12
+    - cron: '38 0 * * *'  # 08:38
+    - cron: '24 1 * * *'  # 09:24
+    - cron: '45 2 * * *'  # 10:45
+    - cron: '2 3 * * *'   # 11:02
   workflow_dispatch:
     inputs:
       force_run:
@@ -12,7 +16,6 @@ on:
         type: boolean
         default: false
 
-# ⚡ 关键权限：允许脚本读写 GitHub Issues (用于记账)
 permissions:
   contents: read
   issues: write
@@ -57,7 +60,6 @@ jobs:
           AC_TAG = "大号"
           # ==========================================
 
-          # --- 基础配置 ---
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
           FOCUS_PEER = "@lilyembybot"
 
@@ -89,24 +91,16 @@ jobs:
                   params = {"state": "open", "creator": "app/github-actions"}
                   resp = requests.get(api_url, headers=headers, params=params)
                   issues = resp.json()
-                  
                   for issue in issues:
                       if issue['title'] == "📅 每日签到日志 (自动维护)":
                           issue_number = issue['number']
                           break
-                  
                   if not issue_number:
                       log("📘 未找到账本，正在创建新的 GitHub Issue...")
-                      create_data = {
-                          "title": "📅 每日签到日志 (自动维护)",
-                          "body": "此 Issue 用于记录脚本签到状态，请勿手动关闭。\n\n**History:**"
-                      }
+                      create_data = {"title": "📅 每日签到日志 (自动维护)", "body": "此 Issue 用于记录脚本签到状态，请勿手动关闭。\n\n**History:**"}
                       create_resp = requests.post(api_url, headers=headers, json=create_data)
-                      if create_resp.status_code == 201:
-                          issue_number = create_resp.json()['number']
-                      else:
-                          log(f"⚠️ 创建账本失败: {create_resp.text}")
-                          return False, None
+                      if create_resp.status_code == 201: issue_number = create_resp.json()['number']
+                      else: return False, None
                   
                   comments_url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
                   comments_resp = requests.get(comments_url, headers=headers)
@@ -114,27 +108,18 @@ jobs:
                   
                   marker = f"✅ {today_str}"
                   for comment in reversed(comments):
-                      if marker in comment['body']:
-                          return True, issue_number
-                  
+                      if marker in comment['body']: return True, issue_number
                   return False, issue_number
-
-              except Exception as e:
-                  log(f"⚠️ GitHub API 错误: {e}")
-                  return False, None
+              except: return False, None
 
           def write_github_ledger(issue_number, today_str):
               token = os.environ.get('GH_TOKEN')
               repo = os.environ.get('GH_REPO')
               if not token or not repo or not issue_number: return
-              
               headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
               url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
-              
               data = {"body": f"✅ {today_str} 任务已完成 ({AC_TAG})"}
-              try:
-                  requests.post(url, headers=headers, json=data)
-                  log(f"📘 已在 GitHub Issue 记录今日战绩")
+              try: requests.post(url, headers=headers, json=data)
               except: pass
           # ===========================================
 
@@ -143,57 +128,39 @@ jobs:
                   mail_user = os.environ.get('MAIL_USER')
                   mail_pass = os.environ.get('MAIL_PASS')
                   if not mail_user or not mail_pass: return
-
                   log_html = "<br>".join(execution_log)
                   today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
-                  
                   focus_status = "❌ 未检测到运行"
                   focus_emoji = "⚠️"
                   found_focus = False
-                  
                   for line in execution_log:
                       if FOCUS_PEER in line:
                           found_focus = True
                           if "✅" in line or "成功" in line:
-                              focus_status = "✅ 签到成功"
-                              focus_emoji = "🐱"
+                              focus_status = "✅ 签到成功"; focus_emoji = "🐱"
                           elif "❌" in line:
-                              focus_status = "❌ 签到失败"
-                              focus_emoji = "😿"
+                              focus_status = "❌ 签到失败"; focus_emoji = "😿"
                           break
-                  if not found_focus:
-                      focus_status = "⚠️ 无重点对象"
-                      focus_emoji = "❓"
+                  if not found_focus: focus_status = "⚠️ 无重点对象"; focus_emoji = "❓"
 
-                  # 🎨 旧版经典 UI 还原
                   html_content = f"""
                   <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.05);">
                       <div style="background: #34495e; padding: 15px 20px; text-align: left; color: #fff;">
                           <h2 style="margin:0; font-size: 18px; font-weight: 500;">📅 每日战报 ({today})</h2>
                       </div>
-                      
                       <div style="background: #f4f6f7; padding: 15px 20px; border-bottom: 1px solid #e0e0e0;">
                           <div style="font-size: 12px; color: #7f8c8d; font-weight: bold; margin-bottom: 5px;">重点关注 ({FOCUS_PEER})</div>
                           <div style="font-size: 20px; font-weight: bold; color: #2c3e50; display: flex; align-items: center;">
                              <span style="margin-right: 8px;">{focus_emoji}</span> {focus_status}
                           </div>
                       </div>
-
                       <div style="padding: 20px;">
                           <p style="color: #34495e; font-size: 14px; margin-top: 0;">🤖 尊贵的本体：{AC_TAG} 任务执行完毕。</p>
-                          
                           <div style="display: flex; gap: 10px; margin: 15px 0;">
-                              <div style="flex:1; background:#e8f5e9; padding:10px; text-align:center; border-radius:4px; color:#2e7d32; font-weight:bold; font-size:14px;">
-                                  ✅ 总成功: {success_count}
-                              </div>
-                              <div style="flex:1; background:#ffebee; padding:10px; text-align:center; border-radius:4px; color:#c62828; font-weight:bold; font-size:14px;">
-                                  ❌ 总失败: {fail_count}
-                              </div>
+                              <div style="flex:1; background:#e8f5e9; padding:10px; text-align:center; border-radius:4px; color:#2e7d32; font-weight:bold; font-size:14px;">✅ 总成功: {success_count}</div>
+                              <div style="flex:1; background:#ffebee; padding:10px; text-align:center; border-radius:4px; color:#c62828; font-weight:bold; font-size:14px;">❌ 总失败: {fail_count}</div>
                           </div>
-                          
-                          <div style="background:#f8f9fa; padding:15px; font-size:12px; font-family: 'Courier New', monospace; height:320px; overflow-y:auto; border: 1px solid #eee; border-radius: 4px; line-height: 1.5;">
-                              {log_html}
-                          </div>
+                          <div style="background:#f8f9fa; padding:15px; font-size:12px; font-family: 'Courier New', monospace; height:320px; overflow-y:auto; border: 1px solid #eee; border-radius: 4px; line-height: 1.5;">{log_html}</div>
                       </div>
                   </div>
                   """
@@ -211,29 +178,21 @@ jobs:
           async def main():
               global success_count, fail_count
               try:
-                  api_id = int(os.environ['API_ID'])
-                  api_hash = os.environ['API_HASH']
-                  session = os.environ['SESSION']
+                  api_id = int(os.environ['API_ID']); api_hash = os.environ['API_HASH']; session = os.environ['SESSION']
                   configs = json.loads(os.environ['CHECK_IN_CONFIG'])
-              except Exception as e:
-                  print(f"❌ 配置读取失败: {e}")
-                  return
+              except: print("❌ 配置读取失败"); return
 
-              utc_now = datetime.datetime.utcnow()
-              cst_now = utc_now + datetime.timedelta(hours=8)
-              current_hour = cst_now.hour
-              today_str = cst_now.strftime('%Y-%m-%d')
-              weekday = cst_now.weekday()
+              utc_now = datetime.datetime.utcnow(); cst_now = utc_now + datetime.timedelta(hours=8)
+              current_hour = cst_now.hour; today_str = cst_now.strftime('%Y-%m-%d'); weekday = cst_now.weekday()
               is_force = os.environ.get('FORCE_RUN') == 'true'
 
-              # 1. 🔍 查 GitHub 账本
+              # 1. 🔍 查账本
               log(f"🔍 [{AC_TAG}] 正在检查 GitHub Issue 账本...")
               is_done, issue_num = check_github_ledger(today_str)
-              
               if is_done and not is_force:
                   log(f"🛑 发现账本已有今日 ({today_str}) 记录，停止运行。")
                   return
-              
+
               # 2. 🎲 摇骰子
               random.seed(cst_now.timestamp())
               hit_prob = 0
@@ -242,11 +201,7 @@ jobs:
               elif current_hour == 9: hit_prob = 60
               elif current_hour == 10: hit_prob = 80
               elif current_hour >= 11: hit_prob = 100
-
-              if weekday > 4: # 周末
-                  if current_hour == 7: hit_prob = 10
-                  elif current_hour == 8: hit_prob = 10
-                  elif current_hour == 9: hit_prob = 50
+              if weekday > 4 and current_hour <= 9: hit_prob = 10 # 周末赖床
               
               dice = random.randint(1, 100)
               log(f"📅 当前: {current_hour}点 | 🎲 概率: {hit_prob}% | 点数: {dice}")
@@ -255,24 +210,23 @@ jobs:
                   log("💤 命运之轮决定：再睡会儿... (跳过)")
                   return
 
-              # 3. 执行任务
-              wait_seconds = random.randint(30, 300)
+              # 3. ⏳ 执行前摇 (1-20分钟)
+              wait_seconds = random.randint(60, 1200)
               if current_hour >= 11: wait_seconds = random.randint(10, 60)
-              log(f"⏳ 决定执行，等待 {wait_seconds} 秒模拟前摇...")
+              log(f"⏳ 决定执行，等待 {wait_seconds} 秒模拟前摇 (1-20分钟)...")
               await asyncio.sleep(wait_seconds)
 
-              async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus 13", system_version="Android 16", app_version="12.3.1", lang_code="zh", system_lang_code="zh-CN") as client:
+              # 4. 🚀 真正开始干活 (已更新真机伪装)
+              # 👇👇👇 这里的 device_model 和 system_version 已经换成了你的真机参数 👇👇👇
+              async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110", system_version="ColorOS 16.0.2", app_version="12.3.1", lang_code="zh", system_lang_code="zh-CN") as client:
                   log("🚀 开始执行签到任务...")
                   random.shuffle(configs)
-
                   for index, item in enumerate(configs):
                       try:
                           peer = item['peer']
                           if index > 0 and index % 5 == 0: await asyncio.sleep(random.randint(20, 40))
                           await asyncio.sleep(random.choice([3, 5, 8, 12]))
-                          
                           await client.send_message(peer, item['message'])
-                          
                           if item.get('button'):
                               await asyncio.sleep(random.randint(3, 6))
                               found = False
@@ -283,27 +237,15 @@ jobs:
                                               if clean_text(item['button']) in clean_text(btn.text) or any(clean_text(k) in clean_text(btn.text) for k in FALLBACK_KEYWORDS):
                                                   await client.send_read_acknowledge(peer, message=bot_msg)
                                                   await asyncio.sleep(random.uniform(1.5, 3.0))
-                                                  await btn.click()
-                                                  log(f"✅ {peer}：点击 [{btn.text}]")
-                                                  found = True
-                                                  success_count += 1
-                                                  break
+                                                  await btn.click(); log(f"✅ {peer}：点击 [{btn.text}]"); found = True; success_count += 1; break
                                           if found: break
                                   if found: break
                               if not found: log(f"⚠️ {peer}：未找到按钮")
-                          else:
-                              log(f"✅ {peer}：指令已发送")
-                              success_count += 1
-                      except Exception as e:
-                          log(f"❌ {peer}：错误 - {str(e)}")
-                          fail_count += 1
+                          else: log(f"✅ {peer}：指令已发送"); success_count += 1
+                      except Exception as e: log(f"❌ {peer}：错误 - {str(e)}"); fail_count += 1
 
-                  # 4. 📝 记账
-                  if issue_num:
-                      write_github_ledger(issue_num, today_str)
-
-                  log("👋 任务结束。")
-                  send_email_report()
+                  if issue_num: write_github_ledger(issue_num, today_str)
+                  log("👋 任务结束。"); send_email_report()
 
           if __name__ == '__main__':
               asyncio.run(main())
