@@ -2,7 +2,6 @@ name: Telegram Auto Checkin (Main)
 
 on:
   schedule:
-    # ✅ 错峰乱序定时
     - cron: '12 23 * * *' # 07:12
     - cron: '38 0 * * *'  # 08:38
     - cron: '24 1 * * *'  # 09:24
@@ -77,14 +76,15 @@ jobs:
               timestamp = cst_now.strftime("%H:%M:%S")
               execution_log.append(f"[{timestamp}] {message}")
 
-          # =========== GitHub Issues 账本逻辑 ===========
-          def check_github_ledger(today_str):
+          # =========== GitHub Issues 按月账本逻辑 ===========
+          def check_github_ledger(today_str, month_str):
               token = os.environ.get('GH_TOKEN')
               repo = os.environ.get('GH_REPO')
               if not token or not repo: return False, None
               
               headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
               api_url = f"https://api.github.com/repos/{repo}/issues"
+              ledger_title = f"📅 签到账本 ({month_str})"
               
               issue_number = None
               try:
@@ -92,17 +92,18 @@ jobs:
                   resp = requests.get(api_url, headers=headers, params=params)
                   issues = resp.json()
                   for issue in issues:
-                      if issue['title'] == "📅 每日签到日志 (自动维护)":
+                      if issue['title'] == ledger_title:
                           issue_number = issue['number']
                           break
                   if not issue_number:
-                      log("📘 未找到账本，正在创建新的 GitHub Issue...")
-                      create_data = {"title": "📅 每日签到日志 (自动维护)", "body": "此 Issue 用于记录脚本签到状态，请勿手动关闭。\n\n**History:**"}
+                      log(f"📘 未找到本月账本，正在创建 {ledger_title}...")
+                      create_data = {"title": ledger_title, "body": "此 Issue 用于记录本月脚本签到状态，跨月将自动建新帖。\n\n**History:**"}
                       create_resp = requests.post(api_url, headers=headers, json=create_data)
                       if create_resp.status_code == 201: issue_number = create_resp.json()['number']
                       else: return False, None
                   
-                  comments_url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
+                  # 强制拉取 100 条记录，彻底解决分页 Bug
+                  comments_url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments?per_page=100"
                   comments_resp = requests.get(comments_url, headers=headers)
                   comments = comments_resp.json()
                   
@@ -183,41 +184,45 @@ jobs:
               except: print("❌ 配置读取失败"); return
 
               utc_now = datetime.datetime.utcnow(); cst_now = utc_now + datetime.timedelta(hours=8)
-              current_hour = cst_now.hour; today_str = cst_now.strftime('%Y-%m-%d'); weekday = cst_now.weekday()
+              current_hour = cst_now.hour
+              today_str = cst_now.strftime('%Y-%m-%d')
+              month_str = cst_now.strftime('%Y-%m') # 新增：获取当前年月
+              weekday = cst_now.weekday()
               is_force = os.environ.get('FORCE_RUN') == 'true'
 
-              # 1. 🔍 查账本
+              # 1. 🔍 查账本 (传入 today_str 和 month_str)
               log(f"🔍 [{AC_TAG}] 正在检查 GitHub Issue 账本...")
-              is_done, issue_num = check_github_ledger(today_str)
+              is_done, issue_num = check_github_ledger(today_str, month_str)
               if is_done and not is_force:
                   log(f"🛑 发现账本已有今日 ({today_str}) 记录，停止运行。")
                   return
 
-              # 2. 🎲 摇骰子
+              # 2. 🎲 摇骰子 (工作日早起 / 周末赖床)
               random.seed(cst_now.timestamp())
               hit_prob = 0
-              if current_hour == 7: hit_prob = 30
-              elif current_hour == 8: hit_prob = 40
-              elif current_hour == 9: hit_prob = 60
-              elif current_hour == 10: hit_prob = 80
-              elif current_hour >= 11: hit_prob = 100
-              if weekday > 4 and current_hour <= 9: hit_prob = 10 # 周末赖床
+              if weekday <= 4: 
+                  if current_hour == 7: hit_prob = 60
+                  elif current_hour == 8: hit_prob = 85
+                  elif current_hour >= 9: hit_prob = 100 
+              else: 
+                  if current_hour <= 8: hit_prob = 0 
+                  elif current_hour == 9: hit_prob = 10
+                  elif current_hour == 10: hit_prob = 50
+                  elif current_hour >= 11: hit_prob = 100 
               
               dice = random.randint(1, 100)
               log(f"📅 当前: {current_hour}点 | 🎲 概率: {hit_prob}% | 点数: {dice}")
 
-              if not (dice <= hit_prob or is_force or current_hour >= 11):
+              if not (dice <= hit_prob or is_force or hit_prob == 100):
                   log("💤 命运之轮决定：再睡会儿... (跳过)")
                   return
 
-              # 3. ⏳ 执行前摇 (1-20分钟)
+              # 3. ⏳ 执行前摇
               wait_seconds = random.randint(60, 1200)
-              if current_hour >= 11: wait_seconds = random.randint(10, 60)
               log(f"⏳ 决定执行，等待 {wait_seconds} 秒模拟前摇 (1-20分钟)...")
               await asyncio.sleep(wait_seconds)
 
-              # 4. 🚀 真正开始干活 (已更新真机伪装)
-              # 👇👇👇 这里的 device_model 和 system_version 已经换成了你的真机参数 👇👇👇
+              # 4. 🚀 真正开始干活
               async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110", system_version="ColorOS 16.0.2", app_version="12.3.1", lang_code="zh", system_lang_code="zh-CN") as client:
                   log("🚀 开始执行签到任务...")
                   random.shuffle(configs)
