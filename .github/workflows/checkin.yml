@@ -2,11 +2,12 @@ name: Telegram Auto Checkin (Main)
 
 on:
   schedule:
-    - cron: '12 23 * * *' # 07:12
-    - cron: '38 0 * * *'  # 08:38
-    - cron: '24 1 * * *'  # 09:24
-    - cron: '45 2 * * *'  # 10:45
-    - cron: '2 3 * * *'   # 11:02
+    # ✅ 错峰乱序定时
+    - cron: '12 23 * * *'
+    - cron: '38 0 * * *'
+    - cron: '24 1 * * *'
+    - cron: '45 2 * * *'
+    - cron: '2 3 * * *'
   workflow_dispatch:
     inputs:
       force_run:
@@ -102,7 +103,7 @@ jobs:
                       if create_resp.status_code == 201: issue_number = create_resp.json()['number']
                       else: return False, None
                   
-                  # 强制拉取 100 条记录，彻底解决分页 Bug
+                  # 强制拉取 100 条记录
                   comments_url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments?per_page=100"
                   comments_resp = requests.get(comments_url, headers=headers)
                   comments = comments_resp.json()
@@ -186,18 +187,18 @@ jobs:
               utc_now = datetime.datetime.utcnow(); cst_now = utc_now + datetime.timedelta(hours=8)
               current_hour = cst_now.hour
               today_str = cst_now.strftime('%Y-%m-%d')
-              month_str = cst_now.strftime('%Y-%m') # 新增：获取当前年月
+              month_str = cst_now.strftime('%Y-%m')
               weekday = cst_now.weekday()
               is_force = os.environ.get('FORCE_RUN') == 'true'
 
-              # 1. 🔍 查账本 (传入 today_str 和 month_str)
+              # 1. 🔍 第一次查账本 (启动时)
               log(f"🔍 [{AC_TAG}] 正在检查 GitHub Issue 账本...")
               is_done, issue_num = check_github_ledger(today_str, month_str)
               if is_done and not is_force:
                   log(f"🛑 发现账本已有今日 ({today_str}) 记录，停止运行。")
                   return
 
-              # 2. 🎲 摇骰子 (工作日早起 / 周末赖床)
+              # 2. 🎲 摇骰子
               random.seed(cst_now.timestamp())
               hit_prob = 0
               if weekday <= 4: 
@@ -221,6 +222,13 @@ jobs:
               wait_seconds = random.randint(60, 1200)
               log(f"⏳ 决定执行，等待 {wait_seconds} 秒模拟前摇 (1-20分钟)...")
               await asyncio.sleep(wait_seconds)
+
+              # 👇 双重保险：防并发撞车 👇
+              log("🔍 睡醒了，干活前再确认一眼账本...")
+              is_done_again, _ = check_github_ledger(today_str, month_str)
+              if is_done_again and not is_force:
+                  log(f"🛑 虚惊一场！刚才睡觉时已经有别的任务把今天 ({today_str}) 签掉了，直接下班！")
+                  return
 
               # 4. 🚀 真正开始干活
               async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110", system_version="ColorOS 16.0.2", app_version="12.3.1", lang_code="zh", system_lang_code="zh-CN") as client:
