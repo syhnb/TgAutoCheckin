@@ -124,6 +124,7 @@ jobs:
               try: requests.post(url, headers=headers, json=data)
               except: pass
           # ===========================================
+
           def send_email_report():
               try:
                   mail_user = os.environ.get('MAIL_USER')
@@ -214,7 +215,8 @@ jobs:
 
               if not (dice <= hit_prob or is_force or hit_prob == 100): sys_log("💤 再睡会儿..."); return
 
-              wait_seconds = random.randint(60, 1200)
+              # 👇 大号发呆时间也已优化为 1~10 分钟 (600秒)，告别漫长等待！
+              wait_seconds = random.randint(60, 600)
               sys_log(f"⏳ 等待 {wait_seconds} 秒模拟前摇...")
               await asyncio.sleep(wait_seconds)
 
