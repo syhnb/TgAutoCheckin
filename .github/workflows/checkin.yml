@@ -1,6 +1,5 @@
 name: Telegram Auto Checkin (Main)
 
-# 👇 终极护盾：物理并发锁，确保绝对不会同时运行两个实例导致 Session 作废
 concurrency:
   group: ${{ github.workflow }}
 
@@ -36,7 +35,7 @@ jobs:
           python-version: '3.10'
 
       - name: Install dependencies
-        run: pip install telethon requests
+        run: pip install telethon requests google-genai
 
       - name: Run Checkin Script
         env:
@@ -46,12 +45,15 @@ jobs:
           CHECK_IN_CONFIG: ${{ secrets.CHECK_IN_CONFIG }}
           MAIL_USER: ${{ secrets.MAIL_USER }}
           MAIL_PASS: ${{ secrets.MAIL_PASS }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           FORCE_RUN: ${{ inputs.force_run }}
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }} 
           GH_REPO: ${{ github.repository }}
         run: |
           cat << 'EOF' > run_checkin.py
-          import asyncio, json, os, random, re, datetime, smtplib, time, requests
+          import asyncio, json, os, random, re, datetime, smtplib, requests
+          from google import genai
+          from google.genai import types
           from telethon import TelegramClient
           from telethon.sessions import StringSession
           from email.mime.text import MIMEText
@@ -59,224 +61,168 @@ jobs:
           from email.utils import formataddr
 
           # ==========================================
-          # 👇 身份标识：大号
           AC_TAG = "大号"
+          FOCUS_PEER = "@lilyembybot"
           # ==========================================
 
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
-          FOCUS_PEER = "@lilyembybot"
-
-          log_success = []
-          log_warn = []
-          log_fail = []
-          general_log = []
+          log_success, log_warn, log_fail, general_log = [], [], [], []
 
           def clean_text(text):
               return re.sub(r'[^\w\u4e00-\u9fff]+', '', text).lower()
 
           def sys_log(message):
               print(message)
-              utc_now = datetime.datetime.utcnow()
-              cst_now = utc_now + datetime.timedelta(hours=8)
-              timestamp = cst_now.strftime("%H:%M:%S")
-              general_log.append(f"[{timestamp}] {message}")
+              utc_now = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+              general_log.append(f"[{utc_now.strftime('%H:%M:%S')}] {message}")
 
-          # =========== GitHub Issues 账本逻辑 ===========
           def check_github_ledger(today_str, month_str):
-              token = os.environ.get('GH_TOKEN')
-              repo = os.environ.get('GH_REPO')
+              token, repo = os.environ.get('GH_TOKEN'), os.environ.get('GH_REPO')
               if not token or not repo: return False, None
               headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
               api_url = f"https://api.github.com/repos/{repo}/issues"
               ledger_title = f"📅 签到账本 ({month_str})"
-              issue_number = None
               try:
                   params = {"state": "open", "creator": "app/github-actions"}
-                  resp = requests.get(api_url, headers=headers, params=params)
-                  issues = resp.json()
-                  for issue in issues:
-                      if issue['title'] == ledger_title:
-                          issue_number = issue['number']
-                          break
+                  resp = requests.get(api_url, headers=headers, params=params).json()
+                  issue_number = next((i['number'] for i in resp if i['title'] == ledger_title), None)
                   if not issue_number:
-                      sys_log(f"📘 未找到本月账本，正在创建 {ledger_title}...")
-                      create_data = {"title": ledger_title, "body": "此 Issue 用于记录本月脚本签到状态，跨月将自动建新帖。\n\n**History:**"}
-                      create_resp = requests.post(api_url, headers=headers, json=create_data)
-                      if create_resp.status_code == 201: issue_number = create_resp.json()['number']
-                      else: return False, None
+                      create_resp = requests.post(api_url, headers=headers, json={"title": ledger_title, "body": "此 Issue 用于记录签到状态。\n\n**History:**"}).json()
+                      issue_number = create_resp.get('number')
                   
-                  comments_url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments?per_page=100"
-                  comments_resp = requests.get(comments_url, headers=headers)
-                  comments = comments_resp.json()
-                  marker = f"✅ {today_str}"
-                  for comment in reversed(comments):
-                      if marker in comment['body']: return True, issue_number
+                  comments = requests.get(f"{api_url}/{issue_number}/comments?per_page=100", headers=headers).json()
+                  if any(f"✅ {today_str}" in c['body'] for c in comments): return True, issue_number
                   return False, issue_number
               except: return False, None
 
           def write_github_ledger(issue_number, today_str):
-              token = os.environ.get('GH_TOKEN')
-              repo = os.environ.get('GH_REPO')
+              token, repo = os.environ.get('GH_TOKEN'), os.environ.get('GH_REPO')
               if not token or not repo or not issue_number: return
               headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-              url = f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments"
-              data = {"body": f"✅ {today_str} 任务已完成 ({AC_TAG})"}
-              try: requests.post(url, headers=headers, json=data)
-              except: pass
-          # ===========================================
+              requests.post(f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments", headers=headers, json={"body": f"✅ {today_str} 任务已完成 ({AC_TAG})"})
 
           def send_email_report():
               try:
-                  mail_user = os.environ.get('MAIL_USER')
-                  mail_pass = os.environ.get('MAIL_PASS')
+                  mail_user, mail_pass = os.environ.get('MAIL_USER'), os.environ.get('MAIL_PASS')
                   if not mail_user or not mail_pass: return
                   today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
-                  focus_status = "💤 未检测到运行"
-                  focus_emoji = "❔"
-                  if any(FOCUS_PEER in s for s in log_success):
-                      focus_status = "✅ 签到成功"; focus_emoji = "🐱"
-                  elif any(FOCUS_PEER in s for s in log_warn):
-                      focus_status = "⚠️ 未找到按钮或异常"; focus_emoji = "🙀"
-                  elif any(FOCUS_PEER in s for s in log_fail):
-                      focus_status = "❌ 签到失败报错"; focus_emoji = "😿"
+                  focus_status, focus_emoji = "💤 未检测", "❔"
+                  if any(FOCUS_PEER in s for s in log_success): focus_status, focus_emoji = "✅ 签到成功", "🐱"
+                  elif any(FOCUS_PEER in s for s in log_warn): focus_status, focus_emoji = "⚠️ 异常", "🙀"
+                  elif any(FOCUS_PEER in s for s in log_fail): focus_status, focus_emoji = "❌ 失败", "😿"
 
-                  html_details = ""
-                  if log_fail:
-                      html_details += f"<div style='color:#c62828; font-weight:bold; margin-top:15px; font-size:14px;'>❌ 失败列表 ({len(log_fail)})</div>"
-                      html_details += f"<div style='background:#ffebee; padding:10px; border-radius:4px; font-size:12px; margin-top:5px; line-height:1.6;'>{'<br>'.join(log_fail)}</div>"
-                  if log_warn:
-                      html_details += f"<div style='color:#ef6c00; font-weight:bold; margin-top:15px; font-size:14px;'>⚠️ 异常列表 ({len(log_warn)})</div>"
-                      html_details += f"<div style='background:#fff3e0; padding:10px; border-radius:4px; font-size:12px; margin-top:5px; line-height:1.6;'>{'<br>'.join(log_warn)}</div>"
-                  if log_success:
-                      html_details += f"<div style='color:#2e7d32; font-weight:bold; margin-top:15px; font-size:14px;'>✅ 成功列表 ({len(log_success)})</div>"
-                      html_details += f"<div style='background:#e8f5e9; padding:10px; border-radius:4px; font-size:12px; margin-top:5px; line-height:1.6;'>{'<br>'.join(log_success)}</div>"
+                  def format_list(title, color, log_data):
+                      if not log_data: return ""
+                      return f"<div style='color:{color}; font-weight:bold; margin-top:10px;'>{title} ({len(log_data)})</div>" \
+                             f"<div style='background:#f9f9f9; padding:8px; font-size:12px; border-radius:4px;'>{'<br>'.join(log_data)}</div>"
 
                   html_content = f"""
-                  <div style="font-family: 'Helvetica Neue', Helvetica, Arial, sans-serif; max-width: 600px; margin: 0 auto; border: 1px solid #e0e0e0; border-radius: 8px; overflow: hidden; box-shadow: 0 4px 8px rgba(0,0,0,0.05);">
-                      <div style="background: #34495e; padding: 15px 20px; text-align: left; color: #fff;">
-                          <h2 style="margin:0; font-size: 18px; font-weight: 500;">📅 每日战报 ({today})</h2>
+                  <div style="font-family:sans-serif; max-width:600px; border:1px solid #eee; border-radius:8px; padding:20px;">
+                      <h2 style="color:#34495e;">📅 每日战报 ({today})</h2>
+                      <div style="background:#f4f6f7; padding:10px; border-radius:4px;">
+                          <b>重点关注 ({FOCUS_PEER}):</b> {focus_emoji} {focus_status}
                       </div>
-                      <div style="background: #f4f6f7; padding: 15px 20px; border-bottom: 1px solid #e0e0e0;">
-                          <div style="font-size: 12px; color: #7f8c8d; font-weight: bold; margin-bottom: 5px;">重点关注 ({FOCUS_PEER})</div>
-                          <div style="font-size: 20px; font-weight: bold; color: #2c3e50; display: flex; align-items: center;">
-                             <span style="margin-right: 8px;">{focus_emoji}</span> {focus_status}
-                          </div>
+                      <div style="display:flex; margin:15px 0; gap:10px; font-size:13px; font-weight:bold;">
+                          <div style="flex:1; color:#2e7d32; background:#e8f5e9; padding:8px; border-radius:4px; text-align:center;">✅ 成功: {len(log_success)}</div>
+                          <div style="flex:1; color:#ef6c00; background:#fff3e0; padding:8px; border-radius:4px; text-align:center;">⚠️ 异常: {len(log_warn)}</div>
+                          <div style="flex:1; color:#c62828; background:#ffebee; padding:8px; border-radius:4px; text-align:center;">❌ 失败: {len(log_fail)}</div>
                       </div>
-                      <div style="padding: 20px;">
-                          <p style="color: #34495e; font-size: 14px; margin-top: 0;">🤖 尊贵的本体：{AC_TAG} 任务执行完毕。</p>
-                          <div style="display: flex; gap: 8px; margin: 15px 0;">
-                              <div style="flex:1; background:#e8f5e9; padding:10px 5px; text-align:center; border-radius:4px; color:#2e7d32; font-weight:bold; font-size:13px;">✅ 成功: {len(log_success)}</div>
-                              <div style="flex:1; background:#fff3e0; padding:10px 5px; text-align:center; border-radius:4px; color:#ef6c00; font-weight:bold; font-size:13px;">⚠️ 异常: {len(log_warn)}</div>
-                              <div style="flex:1; background:#ffebee; padding:10px 5px; text-align:center; border-radius:4px; color:#c62828; font-weight:bold; font-size:13px;">❌ 失败: {len(log_fail)}</div>
-                          </div>
-                          <div style="border-top: 1px dashed #e0e0e0; padding-top: 5px; margin-top: 15px;">{html_details}</div>
-                      </div>
+                      {format_list('❌ 失败列表', '#c62828', log_fail)}
+                      {format_list('⚠️ 异常列表', '#ef6c00', log_warn)}
+                      {format_list('✅ 成功列表', '#2e7d32', log_success)}
                   </div>
                   """
                   message = MIMEText(html_content, 'html', 'utf-8')
                   message['From'] = formataddr(("Telegram管家", mail_user))
-                  message['To'] = Header("Master", 'utf-8')
-                  title_icon = "✅"
-                  if log_fail: title_icon = "❌"
-                  elif log_warn: title_icon = "⚠️"
-                  message['Subject'] = Header(f"TG战报 ({AC_TAG}) | {title_icon} 成功:{len(log_success)} 异常:{len(log_warn)}", 'utf-8')
-                  smtpObj = smtplib.SMTP_SSL('smtp.qq.com', 465)
-                  smtpObj.login(mail_user, mail_pass)
-                  smtpObj.sendmail(mail_user, [mail_user], message.as_string())
-                  print("📧 邮件发送成功")
-              except Exception as e: print(f"❌ 邮件发送报错: {e}")
+                  title_icon = "❌" if log_fail else ("⚠️" if log_warn else "✅")
+                  # 👇 邮件标题修复：完整显示三项数据
+                  message['Subject'] = Header(f"TG战报 ({AC_TAG}) | {title_icon} 成功:{len(log_success)} 异常:{len(log_warn)} 失败:{len(log_fail)}", 'utf-8')
+                  with smtplib.SMTP_SSL('smtp.qq.com', 465) as smtp:
+                      smtp.login(mail_user, mail_pass)
+                      smtp.sendmail(mail_user, [mail_user], message.as_string())
+              except Exception as e: print(f"📧 邮件发送报错: {e}")
+
+          async def identify_captcha(client, peer, message):
+              key = os.environ.get('GEMINI_API_KEY')
+              if not key: return None
+              try:
+                  sys_log(f"📷 发现 {peer} 发送了图片验证码，启动 AI 识图...")
+                  photo_bytes = await client.download_media(message.photo, file=bytes)
+                  ai_client = genai.Client(api_key=key)
+                  prompt = "图中是什么主要物体？请只回答一个名词关键词，如：报纸、熊猫、马桶。如果无法确定，请返回 'unknown'"
+                  response = ai_client.models.generate_content(
+                      model='gemini-1.5-flash',
+                      contents=[prompt, types.Part.from_bytes(data=photo_bytes, mime_type='image/jpeg')]
+                  )
+                  keyword = response.text.strip().lower()
+                  sys_log(f"🧠 AI 识别结果: {keyword}")
+                  return keyword
+              except Exception as e:
+                  sys_log(f"❌ AI 识图报错: {e}"); return None
+
+          async def click_button(client, peer, bot_msg, target_btn_text):
+              if not bot_msg.buttons: return False
+              keyword = None
+              if bot_msg.photo:
+                  keyword = await identify_captcha(client, peer, bot_msg)
+              
+              for row in bot_msg.buttons:
+                  for btn in row:
+                      btn_text = clean_text(btn.text)
+                      # 逻辑：匹配配置按钮名 OR 匹配AI识别词 OR 匹配兜底关键词
+                      if clean_text(target_btn_text) in btn_text or (keyword and keyword in btn_text) or any(clean_text(k) in btn_text for k in FALLBACK_KEYWORDS):
+                          await client.send_read_acknowledge(peer, message=bot_msg)
+                          await asyncio.sleep(random.uniform(1.5, 3.0))
+                          await btn.click()
+                          return btn.text
+              return False
+
           async def main():
               try:
-                  api_id = int(os.environ['API_ID']); api_hash = os.environ['API_HASH']; session = os.environ['SESSION']
+                  api_id, api_hash, session = int(os.environ['API_ID']), os.environ['API_HASH'], os.environ['SESSION']
                   configs = json.loads(os.environ['CHECK_IN_CONFIG'])
               except: sys_log("❌ 配置读取失败"); return
 
-              utc_now = datetime.datetime.utcnow(); cst_now = utc_now + datetime.timedelta(hours=8)
-              current_hour = cst_now.hour; today_str = cst_now.strftime('%Y-%m-%d'); month_str = cst_now.strftime('%Y-%m')
-              weekday = cst_now.weekday(); is_force = os.environ.get('FORCE_RUN') == 'true'
+              utc_now = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+              today_str, month_str, is_force = utc_now.strftime('%Y-%m-%d'), utc_now.strftime('%Y-%m'), os.environ.get('FORCE_RUN') == 'true'
 
-              sys_log(f"🔍 [{AC_TAG}] 正在检查 GitHub Issue 账本...")
-              is_done, issue_num = check_github_ledger(today_str, month_str)
-              if is_done and not is_force: sys_log(f"🛑 今日 ({today_str}) 已签，下班。"); return
+              sys_log(f"🔍 [{AC_TAG}] 检查账本..."); is_done, issue_num = check_github_ledger(today_str, month_str)
+              if is_done and not is_force: sys_log("🛑 今日已签，下班。"); return
 
-              random.seed(cst_now.timestamp()); hit_prob = 0
-              if weekday <= 4: 
-                  if current_hour == 7: hit_prob = 60
-                  elif current_hour == 8: hit_prob = 85
-                  elif current_hour >= 9: hit_prob = 100 
-              else: 
-                  if current_hour <= 8: hit_prob = 0 
-                  elif current_hour == 9: hit_prob = 10
-                  elif current_hour == 10: hit_prob = 50
-                  elif current_hour >= 11: hit_prob = 100 
-              
-              dice = random.randint(1, 100)
-              sys_log(f"📅 当前: {current_hour}点 | 🎲 概率: {hit_prob}% | 点数: {dice}")
-
-              if not (dice <= hit_prob or is_force or hit_prob == 100): sys_log("💤 再睡会儿..."); return
-
-              # 👇 大号发呆时间也已优化为 1~10 分钟 (600秒)，告别漫长等待！
               wait_seconds = random.randint(60, 600)
-              sys_log(f"⏳ 等待 {wait_seconds} 秒模拟前摇...")
-              await asyncio.sleep(wait_seconds)
+              sys_log(f"⏳ 等待 {wait_seconds} 秒模拟随机前摇..."); await asyncio.sleep(wait_seconds)
 
-              is_done_again, _ = check_github_ledger(today_str, month_str)
-              if is_done_again and not is_force: sys_log("🛑 别人干过了，下班！"); return
-              async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110", system_version="ColorOS 16.0.2", app_version="12.3.1", lang_code="zh", system_lang_code="zh-CN") as client:
-                  sys_log("🚀 开始执行签到任务...")
-                  random.shuffle(configs)
+              async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110", system_version="ColorOS 16.0.2") as client:
+                  sys_log("🚀 开始任务..."); random.shuffle(configs)
                   for index, item in enumerate(configs):
                       peer = item['peer']
                       if index > 0 and index % 5 == 0: await asyncio.sleep(random.randint(20, 40))
-                      await asyncio.sleep(random.choice([3, 5, 8, 12]))
+                      await asyncio.sleep(random.randint(5, 12))
                       
-                      # 👇 核心：断线重连 + 三重重试机制 👇
-                      max_retries = 3
-                      for attempt in range(max_retries):
+                      for attempt in range(3):
                           try:
-                              if not client.is_connected():
-                                  sys_log(f"⚠️ 检测到网络断开，正在为 {peer} 尝试重新连接...")
-                                  await client.connect()
-
+                              if not client.is_connected(): await client.connect()
                               await client.send_message(peer, item['message'])
                               if item.get('button'):
-                                  await asyncio.sleep(random.randint(3, 6))
+                                  await asyncio.sleep(random.randint(5, 8)) # 给机器人响应图片留时间
                                   found = False
                                   async for bot_msg in client.iter_messages(peer, limit=3):
-                                      if bot_msg.buttons:
-                                          for row in bot_msg.buttons:
-                                              for btn in row:
-                                                  if clean_text(item['button']) in clean_text(btn.text) or any(clean_text(k) in clean_text(btn.text) for k in FALLBACK_KEYWORDS):
-                                                      await client.send_read_acknowledge(peer, message=bot_msg)
-                                                      await asyncio.sleep(random.uniform(1.5, 3.0))
-                                                      await btn.click()
-                                                      log_success.append(f"{peer}: 点击 [{btn.text}]")
-                                                      print(f"✅ {peer}: 点击 [{btn.text}]")
-                                                      found = True; break
-                                              if found: break
-                                      if found: break
+                                      clicked_text = await click_button(client, peer, bot_msg, item['button'])
+                                      if clicked_text:
+                                          log_success.append(f"{peer}: 点击 [{clicked_text}]")
+                                          sys_log(f"✅ {peer}: 点击成功 [{clicked_text}]"); found = True; break
                                   if not found: 
-                                      log_warn.append(f"{peer}: 未找到按钮")
-                                      print(f"⚠️ {peer}: 未找到按钮")
+                                      log_warn.append(f"{peer}: 未找到按钮"); sys_log(f"⚠️ {peer}: 未找到按钮")
                               else: 
-                                  log_success.append(f"{peer}: 指令已发送")
-                                  print(f"✅ {peer}: 指令已发送")
-                              
-                              break # 成功执行，跳出重试循环
+                                  log_success.append(f"{peer}: 指令已发送"); sys_log(f"✅ {peer}: 指令发送成功")
+                              break
                           except Exception as e:
-                              err_msg = str(e)
-                              if attempt < max_retries - 1:
-                                  print(f"⚠️ {peer}: 操作报错 ({err_msg})，等待重试...")
-                                  await asyncio.sleep(random.randint(5, 10))
-                              else:
-                                  log_fail.append(f"{peer}: 报错 - {err_msg}")
-                                  print(f"❌ {peer}: 最终报错 - {err_msg}")
-                      # 👆 重试机制结束 👆
+                              if attempt < 2: await asyncio.sleep(10)
+                              else: log_fail.append(f"{peer}: 最终报错 - {e}"); sys_log(f"❌ {peer}: 报错")
 
                   if issue_num: write_github_ledger(issue_num, today_str)
-                  sys_log("👋 任务结束。"); send_email_report()
+                  sys_log("👋 结束。"); send_email_report()
 
-          if __name__ == '__main__':
-              asyncio.run(main())
+          if __name__ == '__main__': asyncio.run(main())
           EOF
           python run_checkin.py
