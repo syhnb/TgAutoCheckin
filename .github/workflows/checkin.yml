@@ -1,4 +1,4 @@
-name: Telegram Auto Checkin (Main) - V5.4 Perfect
+name: Telegram Auto Checkin (Main) - V5.5
 
 concurrency:
   group: ${{ github.workflow }}
@@ -71,6 +71,37 @@ jobs:
               now = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
               print(f"[{now.strftime('%H:%M:%S')}] {message}")
 
+          def check_github_ledger(today_str, month_str):
+              token, repo = os.environ.get('GH_TOKEN'), os.environ.get('GH_REPO')
+              if not token or not repo: return False, None
+              headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+              api_url = f"https://api.github.com/repos/{repo}/issues"
+              ledger_title = f"📅 签到账本 ({month_str})"
+              try:
+                  params = {"state": "open", "creator": "app/github-actions"}
+                  resp = requests.get(api_url, headers=headers, params=params).json()
+                  issue_number = next((i['number'] for i in resp if i['title'] == ledger_title), None)
+                  if not issue_number:
+                      create_resp = requests.post(api_url, headers=headers, json={"title": ledger_title, "body": "签到状态记录"}).json()
+                      issue_number = create_resp.get('number')
+
+                  page = 1
+                  target_str = f"✅ {today_str} 任务已完成 ({AC_TAG})" # 👇 修复串台：精准识别大号
+                  while True: # 👇 修复重复：无限翻页，突破 100 条限制
+                      comments = requests.get(f"{api_url}/{issue_number}/comments?per_page=100&page={page}", headers=headers).json()
+                      if not comments: break
+                      if any(target_str in c['body'] for c in comments): return True, issue_number
+                      if len(comments) < 100: break
+                      page += 1
+                  return False, issue_number
+              except: return False, None
+
+          def write_github_ledger(issue_number, today_str):
+              token, repo = os.environ.get('GH_TOKEN'), os.environ.get('GH_REPO')
+              if not token or not repo or not issue_number: return
+              headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
+              requests.post(f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments", headers=headers, json={"body": f"✅ {today_str} 任务已完成 ({AC_TAG})"})
+
           async def identify_captcha(client, peer, message):
               key = os.environ.get('GEMINI_API_KEY')
               if not key: return None
@@ -95,9 +126,7 @@ jobs:
                   for btn in row:
                       text = clean_text(btn.text)
                       if (keyword and keyword in text) or clean_text(target) in text or any(clean_text(k) in text for k in FALLBACK_KEYWORDS):
-                          # 👇 找回伪装 1：先模拟人类把消息标记为“已读”
                           await client.send_read_acknowledge(peer, message=bot_msg)
-                          # 👇 找回伪装 2：模拟人类神经反应时间，随机停顿 0.5 到 1.2 秒
                           await asyncio.sleep(random.uniform(0.5, 1.2))
                           await btn.click()
                           return btn.text
@@ -125,6 +154,12 @@ jobs:
                   configs = json.loads(os.environ['CHECK_IN_CONFIG'])
               except: sys_log("❌ 配置读取失败"); return
 
+              utc_now = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+              today_str, month_str, is_force = utc_now.strftime('%Y-%m-%d'), utc_now.strftime('%Y-%m'), os.environ.get('FORCE_RUN') == 'true'
+
+              sys_log(f"🔍 [{AC_TAG}] 检查账本..."); is_done, issue_num = check_github_ledger(today_str, month_str)
+              if is_done and not is_force: sys_log("🛑 今日已签，下班。"); return
+
               await asyncio.sleep(random.randint(10, 30))
               async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110") as client:
                   random.shuffle(configs)
@@ -148,6 +183,7 @@ jobs:
                               if not found: log_warn.append(f"{peer}: 识别或点击超时")
                           else: log_success.append(f"{peer}: 指令已发送")
                       except Exception as e: log_fail.append(f"{peer}: {str(e)}")
+                  if issue_num: write_github_ledger(issue_num, today_str)
                   send_email_report()
 
           if __name__ == '__main__': asyncio.run(main())
