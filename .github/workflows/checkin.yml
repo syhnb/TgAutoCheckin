@@ -1,4 +1,4 @@
-name: Telegram Auto Checkin (Main)
+name: Telegram Auto Checkin (Main) - V5.4 Perfect
 
 concurrency:
   group: ${{ github.workflow }}
@@ -13,7 +13,7 @@ on:
   workflow_dispatch:
     inputs:
       force_run:
-        description: '强制运行 (无视吉时)'
+        description: '强制运行'
         required: false
         type: boolean
         default: false
@@ -60,122 +60,64 @@ jobs:
           from email.header import Header
           from email.utils import formataddr
 
-          # ==========================================
-          AC_TAG = "大号"
-          FOCUS_PEER = "@lilyembybot"
-          # ==========================================
-
+          AC_TAG, FOCUS_PEER = "大号", "@lilyembybot"
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
-          log_success, log_warn, log_fail, general_log = [], [], [], []
+          log_success, log_warn, log_fail = [], [], []
 
           def clean_text(text):
               return re.sub(r'[^\w\u4e00-\u9fff]+', '', text).lower()
 
           def sys_log(message):
-              print(message)
-              utc_now = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-              general_log.append(f"[{utc_now.strftime('%H:%M:%S')}] {message}")
+              now = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
+              print(f"[{now.strftime('%H:%M:%S')}] {message}")
 
-          def check_github_ledger(today_str, month_str):
-              token, repo = os.environ.get('GH_TOKEN'), os.environ.get('GH_REPO')
-              if not token or not repo: return False, None
-              headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-              api_url = f"https://api.github.com/repos/{repo}/issues"
-              ledger_title = f"📅 签到账本 ({month_str})"
+          async def identify_captcha(client, peer, message):
+              key = os.environ.get('GEMINI_API_KEY')
+              if not key: return None
               try:
-                  params = {"state": "open", "creator": "app/github-actions"}
-                  resp = requests.get(api_url, headers=headers, params=params).json()
-                  issue_number = next((i['number'] for i in resp if i['title'] == ledger_title), None)
-                  if not issue_number:
-                      create_resp = requests.post(api_url, headers=headers, json={"title": ledger_title, "body": "此 Issue 用于记录签到状态。\n\n**History:**"}).json()
-                      issue_number = create_resp.get('number')
-                  
-                  comments = requests.get(f"{api_url}/{issue_number}/comments?per_page=100", headers=headers).json()
-                  if any(f"✅ {today_str}" in c['body'] for c in comments): return True, issue_number
-                  return False, issue_number
-              except: return False, None
+                  sys_log(f"📷 发现 {peer} 验证图片，AI 极速识别中...")
+                  photo_bytes = await client.download_media(message.photo, file=bytes)
+                  ai_client = genai.Client(api_key=key)
+                  response = ai_client.models.generate_content(
+                      model='gemini-1.5-flash',
+                      contents=["图中是什么？仅回答一个名词，如：报纸、熊猫、马桶", types.Part.from_bytes(data=photo_bytes, mime_type='image/jpeg')]
+                  )
+                  keyword = response.text.strip().lower()
+                  sys_log(f"🧠 AI 极速响应: {keyword}")
+                  return keyword
+              except Exception as e:
+                  sys_log(f"❌ 识图报错: {e}"); return None
 
-          def write_github_ledger(issue_number, today_str):
-              token, repo = os.environ.get('GH_TOKEN'), os.environ.get('GH_REPO')
-              if not token or not repo or not issue_number: return
-              headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
-              requests.post(f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments", headers=headers, json={"body": f"✅ {today_str} 任务已完成 ({AC_TAG})"})
+          async def click_button(client, peer, bot_msg, target):
+              if not bot_msg.buttons: return False
+              keyword = await identify_captcha(client, peer, bot_msg) if bot_msg.photo else None
+              for row in bot_msg.buttons:
+                  for btn in row:
+                      text = clean_text(btn.text)
+                      if (keyword and keyword in text) or clean_text(target) in text or any(clean_text(k) in text for k in FALLBACK_KEYWORDS):
+                          # 👇 找回伪装 1：先模拟人类把消息标记为“已读”
+                          await client.send_read_acknowledge(peer, message=bot_msg)
+                          # 👇 找回伪装 2：模拟人类神经反应时间，随机停顿 0.5 到 1.2 秒
+                          await asyncio.sleep(random.uniform(0.5, 1.2))
+                          await btn.click()
+                          return btn.text
+              return False
 
           def send_email_report():
               try:
                   mail_user, mail_pass = os.environ.get('MAIL_USER'), os.environ.get('MAIL_PASS')
                   if not mail_user or not mail_pass: return
                   today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
-                  focus_status, focus_emoji = "💤 未检测", "❔"
-                  if any(FOCUS_PEER in s for s in log_success): focus_status, focus_emoji = "✅ 签到成功", "🐱"
-                  elif any(FOCUS_PEER in s for s in log_warn): focus_status, focus_emoji = "⚠️ 异常", "🙀"
-                  elif any(FOCUS_PEER in s for s in log_fail): focus_status, focus_emoji = "❌ 失败", "😿"
-
-                  def format_list(title, color, log_data):
-                      if not log_data: return ""
-                      return f"<div style='color:{color}; font-weight:bold; margin-top:10px;'>{title} ({len(log_data)})</div>" \
-                             f"<div style='background:#f9f9f9; padding:8px; font-size:12px; border-radius:4px;'>{'<br>'.join(log_data)}</div>"
-
-                  html_content = f"""
-                  <div style="font-family:sans-serif; max-width:600px; border:1px solid #eee; border-radius:8px; padding:20px;">
-                      <h2 style="color:#34495e;">📅 每日战报 ({today})</h2>
-                      <div style="background:#f4f6f7; padding:10px; border-radius:4px;">
-                          <b>重点关注 ({FOCUS_PEER}):</b> {focus_emoji} {focus_status}
-                      </div>
-                      <div style="display:flex; margin:15px 0; gap:10px; font-size:13px; font-weight:bold;">
-                          <div style="flex:1; color:#2e7d32; background:#e8f5e9; padding:8px; border-radius:4px; text-align:center;">✅ 成功: {len(log_success)}</div>
-                          <div style="flex:1; color:#ef6c00; background:#fff3e0; padding:8px; border-radius:4px; text-align:center;">⚠️ 异常: {len(log_warn)}</div>
-                          <div style="flex:1; color:#c62828; background:#ffebee; padding:8px; border-radius:4px; text-align:center;">❌ 失败: {len(log_fail)}</div>
-                      </div>
-                      {format_list('❌ 失败列表', '#c62828', log_fail)}
-                      {format_list('⚠️ 异常列表', '#ef6c00', log_warn)}
-                      {format_list('✅ 成功列表', '#2e7d32', log_success)}
-                  </div>
-                  """
-                  message = MIMEText(html_content, 'html', 'utf-8')
-                  message['From'] = formataddr(("Telegram管家", mail_user))
-                  title_icon = "❌" if log_fail else ("⚠️" if log_warn else "✅")
-                  # 👇 邮件标题修复：完整显示三项数据
-                  message['Subject'] = Header(f"TG战报 ({AC_TAG}) | {title_icon} 成功:{len(log_success)} 异常:{len(log_warn)} 失败:{len(log_fail)}", 'utf-8')
+                  def format_log(title, color, data):
+                      return f"<b style='color:{color}'>{title}:</b><br>{'<br>'.join(data)}<br>" if data else ""
+                  html = f"<h2>战报 ({today})</h2>" + format_log("❌ 失败", "#c62828", log_fail) + format_log("⚠️ 异常", "#ef6c00", log_warn) + format_log("✅ 成功", "#2e7d32", log_success)
+                  msg = MIMEText(html, 'html', 'utf-8')
+                  msg['From'] = formataddr(("TG管家", mail_user))
+                  icon = "❌" if log_fail else ("⚠️" if log_warn else "✅")
+                  msg['Subject'] = Header(f"TG战报 ({AC_TAG}) | {icon} 成功:{len(log_success)} 异常:{len(log_warn)} 失败:{len(log_fail)}", 'utf-8')
                   with smtplib.SMTP_SSL('smtp.qq.com', 465) as smtp:
-                      smtp.login(mail_user, mail_pass)
-                      smtp.sendmail(mail_user, [mail_user], message.as_string())
-              except Exception as e: print(f"📧 邮件发送报错: {e}")
-
-          async def identify_captcha(client, peer, message):
-              key = os.environ.get('GEMINI_API_KEY')
-              if not key: return None
-              try:
-                  sys_log(f"📷 发现 {peer} 发送了图片验证码，启动 AI 识图...")
-                  photo_bytes = await client.download_media(message.photo, file=bytes)
-                  ai_client = genai.Client(api_key=key)
-                  prompt = "图中是什么主要物体？请只回答一个名词关键词，如：报纸、熊猫、马桶。如果无法确定，请返回 'unknown'"
-                  response = ai_client.models.generate_content(
-                      model='gemini-1.5-flash',
-                      contents=[prompt, types.Part.from_bytes(data=photo_bytes, mime_type='image/jpeg')]
-                  )
-                  keyword = response.text.strip().lower()
-                  sys_log(f"🧠 AI 识别结果: {keyword}")
-                  return keyword
-              except Exception as e:
-                  sys_log(f"❌ AI 识图报错: {e}"); return None
-
-          async def click_button(client, peer, bot_msg, target_btn_text):
-              if not bot_msg.buttons: return False
-              keyword = None
-              if bot_msg.photo:
-                  keyword = await identify_captcha(client, peer, bot_msg)
-              
-              for row in bot_msg.buttons:
-                  for btn in row:
-                      btn_text = clean_text(btn.text)
-                      # 逻辑：匹配配置按钮名 OR 匹配AI识别词 OR 匹配兜底关键词
-                      if clean_text(target_btn_text) in btn_text or (keyword and keyword in btn_text) or any(clean_text(k) in btn_text for k in FALLBACK_KEYWORDS):
-                          await client.send_read_acknowledge(peer, message=bot_msg)
-                          await asyncio.sleep(random.uniform(1.5, 3.0))
-                          await btn.click()
-                          return btn.text
-              return False
+                      smtp.login(mail_user, mail_pass); smtp.sendmail(mail_user, [mail_user], msg.as_string())
+              except Exception as e: print(f"📧 邮件报错: {e}")
 
           async def main():
               try:
@@ -183,45 +125,30 @@ jobs:
                   configs = json.loads(os.environ['CHECK_IN_CONFIG'])
               except: sys_log("❌ 配置读取失败"); return
 
-              utc_now = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-              today_str, month_str, is_force = utc_now.strftime('%Y-%m-%d'), utc_now.strftime('%Y-%m'), os.environ.get('FORCE_RUN') == 'true'
-
-              sys_log(f"🔍 [{AC_TAG}] 检查账本..."); is_done, issue_num = check_github_ledger(today_str, month_str)
-              if is_done and not is_force: sys_log("🛑 今日已签，下班。"); return
-
-              wait_seconds = random.randint(60, 600)
-              sys_log(f"⏳ 等待 {wait_seconds} 秒模拟随机前摇..."); await asyncio.sleep(wait_seconds)
-
-              async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110", system_version="ColorOS 16.0.2") as client:
-                  sys_log("🚀 开始任务..."); random.shuffle(configs)
+              await asyncio.sleep(random.randint(10, 30))
+              async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110") as client:
+                  random.shuffle(configs)
                   for index, item in enumerate(configs):
                       peer = item['peer']
-                      if index > 0 and index % 5 == 0: await asyncio.sleep(random.randint(20, 40))
-                      await asyncio.sleep(random.randint(5, 12))
-                      
-                      for attempt in range(3):
-                          try:
-                              if not client.is_connected(): await client.connect()
-                              await client.send_message(peer, item['message'])
-                              if item.get('button'):
-                                  await asyncio.sleep(random.randint(5, 8)) # 给机器人响应图片留时间
-                                  found = False
-                                  async for bot_msg in client.iter_messages(peer, limit=3):
-                                      clicked_text = await click_button(client, peer, bot_msg, item['button'])
-                                      if clicked_text:
-                                          log_success.append(f"{peer}: 点击 [{clicked_text}]")
-                                          sys_log(f"✅ {peer}: 点击成功 [{clicked_text}]"); found = True; break
-                                  if not found: 
-                                      log_warn.append(f"{peer}: 未找到按钮"); sys_log(f"⚠️ {peer}: 未找到按钮")
-                              else: 
-                                  log_success.append(f"{peer}: 指令已发送"); sys_log(f"✅ {peer}: 指令发送成功")
-                              break
-                          except Exception as e:
-                              if attempt < 2: await asyncio.sleep(10)
-                              else: log_fail.append(f"{peer}: 最终报错 - {e}"); sys_log(f"❌ {peer}: 报错")
-
-                  if issue_num: write_github_ledger(issue_num, today_str)
-                  sys_log("👋 结束。"); send_email_report()
+                      if index > 0 and index % 5 == 0: await asyncio.sleep(random.randint(20, 30))
+                      await asyncio.sleep(random.randint(5, 10))
+                      try:
+                          await client.send_message(peer, item['message'])
+                          if item.get('button'):
+                              await asyncio.sleep(3) 
+                              found = False
+                              async for m in client.iter_messages(peer, limit=3):
+                                  if m.buttons: 
+                                      res = await click_button(client, peer, m, item['button'])
+                                      if res: 
+                                          log_success.append(f"{peer}: 点击 [{res}]")
+                                          sys_log(f"✅ {peer}: 绝杀点击成功 [{res}]")
+                                          found = True
+                                      break 
+                              if not found: log_warn.append(f"{peer}: 识别或点击超时")
+                          else: log_success.append(f"{peer}: 指令已发送")
+                      except Exception as e: log_fail.append(f"{peer}: {str(e)}")
+                  send_email_report()
 
           if __name__ == '__main__': asyncio.run(main())
           EOF
