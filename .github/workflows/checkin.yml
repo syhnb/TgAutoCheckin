@@ -1,4 +1,4 @@
-name: Telegram Auto Checkin (Main) - V5.5
+name: Telegram Auto Checkin (Main) - V5.6
 
 concurrency:
   group: ${{ github.workflow }}
@@ -64,30 +64,24 @@ jobs:
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
           log_success, log_warn, log_fail = [], [], []
 
-          def clean_text(text):
-              return re.sub(r'[^\w\u4e00-\u9fff]+', '', text).lower()
+          def clean_text(text): return re.sub(r'[^\w\u4e00-\u9fff]+', '', text).lower()
 
           def sys_log(message):
-              now = datetime.datetime.utcnow() + datetime.timedelta(hours=8)
-              print(f"[{now.strftime('%H:%M:%S')}] {message}")
+              print(f"[{(datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%H:%M:%S')}] {message}")
 
           def check_github_ledger(today_str, month_str):
               token, repo = os.environ.get('GH_TOKEN'), os.environ.get('GH_REPO')
               if not token or not repo: return False, None
               headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
               api_url = f"https://api.github.com/repos/{repo}/issues"
-              ledger_title = f"📅 签到账本 ({month_str})"
               try:
                   params = {"state": "open", "creator": "app/github-actions"}
                   resp = requests.get(api_url, headers=headers, params=params).json()
-                  issue_number = next((i['number'] for i in resp if i['title'] == ledger_title), None)
+                  issue_number = next((i['number'] for i in resp if i['title'] == f"📅 签到账本 ({month_str})"), None)
                   if not issue_number:
-                      create_resp = requests.post(api_url, headers=headers, json={"title": ledger_title, "body": "签到状态记录"}).json()
-                      issue_number = create_resp.get('number')
-
-                  page = 1
-                  target_str = f"✅ {today_str} 任务已完成 ({AC_TAG})" # 👇 修复串台：精准识别大号
-                  while True: # 👇 修复重复：无限翻页，突破 100 条限制
+                      issue_number = requests.post(api_url, headers=headers, json={"title": f"📅 签到账本 ({month_str})", "body": "记录"}).json().get('number')
+                  page, target_str = 1, f"✅ {today_str} 任务已完成 ({AC_TAG})" 
+                  while True: 
                       comments = requests.get(f"{api_url}/{issue_number}/comments?per_page=100&page={page}", headers=headers).json()
                       if not comments: break
                       if any(target_str in c['body'] for c in comments): return True, issue_number
@@ -98,7 +92,6 @@ jobs:
 
           def write_github_ledger(issue_number, today_str):
               token, repo = os.environ.get('GH_TOKEN'), os.environ.get('GH_REPO')
-              if not token or not repo or not issue_number: return
               headers = {"Authorization": f"token {token}", "Accept": "application/vnd.github.v3+json"}
               requests.post(f"https://api.github.com/repos/{repo}/issues/{issue_number}/comments", headers=headers, json={"body": f"✅ {today_str} 任务已完成 ({AC_TAG})"})
 
@@ -136,16 +129,50 @@ jobs:
               try:
                   mail_user, mail_pass = os.environ.get('MAIL_USER'), os.environ.get('MAIL_PASS')
                   if not mail_user or not mail_pass: return
-                  today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
-                  def format_log(title, color, data):
-                      return f"<b style='color:{color}'>{title}:</b><br>{'<br>'.join(data)}<br>" if data else ""
-                  html = f"<h2>战报 ({today})</h2>" + format_log("❌ 失败", "#c62828", log_fail) + format_log("⚠️ 异常", "#ef6c00", log_warn) + format_log("✅ 成功", "#2e7d32", log_success)
-                  msg = MIMEText(html, 'html', 'utf-8')
-                  msg['From'] = formataddr(("TG管家", mail_user))
-                  icon = "❌" if log_fail else ("⚠️" if log_warn else "✅")
-                  msg['Subject'] = Header(f"TG战报 ({AC_TAG}) | {icon} 成功:{len(log_success)} 异常:{len(log_warn)} 失败:{len(log_fail)}", 'utf-8')
+                  today = (datetime.datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d') if 'timedelta' in globals() else (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
+                  focus_status, focus_emoji = "💤 未检测", "❔"
+                  if any(FOCUS_PEER in s for s in log_success): focus_status, focus_emoji = "✅ 签到成功", "🐱"
+                  elif any(FOCUS_PEER in s for s in log_warn): focus_status, focus_emoji = "⚠️ 异常", "🙀"
+                  elif any(FOCUS_PEER in s for s in log_fail): focus_status, focus_emoji = "❌ 失败", "😿"
+
+                  def format_list(title, color, log_data):
+                      if not log_data: return ""
+                      return f"<h3 style='color:{color}; margin-top:15px; border-bottom:1px solid #eee; padding-bottom:5px;'>{title} ({len(log_data)})</h3><div style='background:#f9f9f9; padding:12px; font-size:13px; border-radius:6px; line-height:1.6;'>{'<br>'.join(log_data)}</div>"
+
+                  html_content = f"""
+                  <div style="font-family:sans-serif; max-width:600px; margin:auto; border:1px solid #e0e0e0; border-radius:10px; overflow:hidden; box-shadow:0 4px 10px rgba(0,0,0,0.05);">
+                      <div style="background:#2c3e50; color:white; padding:15px 20px; font-size:18px; font-weight:bold;">
+                          📅 每日战报 ({today})
+                      </div>
+                      <div style="padding:20px;">
+                          <div style="color:#7f8c8d; font-size:13px; margin-bottom:5px;">重点关注 ({FOCUS_PEER})</div>
+                          <div style="font-size:20px; font-weight:bold; margin-bottom:20px;">
+                              {focus_emoji} {focus_status}
+                          </div>
+                          
+                          <div style="font-size:14px; color:#555; margin-bottom:15px; padding-top:15px; border-top:1px dashed #eee;">
+                              🤖 尊贵的本体：{AC_TAG} 任务执行完毕。
+                          </div>
+                          
+                          <div style="display:flex; justify-content:space-between; gap:10px; font-size:14px; font-weight:bold; text-align:center;">
+                              <div style="flex:1; color:#2e7d32; background:#e8f5e9; padding:10px; border-radius:6px;">✅ 成功: {len(log_success)}</div>
+                              <div style="flex:1; color:#ef6c00; background:#fff3e0; padding:10px; border-radius:6px;">⚠️ 异常: {len(log_warn)}</div>
+                              <div style="flex:1; color:#c62828; background:#ffebee; padding:10px; border-radius:6px;">❌ 失败: {len(log_fail)}</div>
+                          </div>
+                          
+                          {format_list('❌ 失败列表', '#c62828', log_fail)}
+                          {format_list('⚠️ 异常列表', '#ef6c00', log_warn)}
+                          {format_list('✅ 成功列表', '#2e7d32', log_success)}
+                      </div>
+                  </div>
+                  """
+                  message = MIMEText(html_content, 'html', 'utf-8')
+                  message['From'] = formataddr(("Telegram管家", mail_user))
+                  title_icon = "❌" if log_fail else ("⚠️" if log_warn else "✅")
+                  message['Subject'] = Header(f"TG战报 ({AC_TAG}) | {title_icon} 成功:{len(log_success)} 异常:{len(log_warn)} 失败:{len(log_fail)}", 'utf-8')
                   with smtplib.SMTP_SSL('smtp.qq.com', 465) as smtp:
-                      smtp.login(mail_user, mail_pass); smtp.sendmail(mail_user, [mail_user], msg.as_string())
+                      smtp.login(mail_user, mail_pass)
+                      smtp.sendmail(mail_user, [mail_user], message.as_string())
               except Exception as e: print(f"📧 邮件报错: {e}")
 
           async def main():
@@ -160,26 +187,28 @@ jobs:
               sys_log(f"🔍 [{AC_TAG}] 检查账本..."); is_done, issue_num = check_github_ledger(today_str, month_str)
               if is_done and not is_force: sys_log("🛑 今日已签，下班。"); return
 
-              await asyncio.sleep(random.randint(10, 30))
+              await asyncio.sleep(random.randint(5, 15))
               async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110") as client:
                   random.shuffle(configs)
                   for index, item in enumerate(configs):
                       peer = item['peer']
-                      if index > 0 and index % 5 == 0: await asyncio.sleep(random.randint(20, 30))
+                      if index > 0 and index % 5 == 0: await asyncio.sleep(random.randint(15, 25))
                       await asyncio.sleep(random.randint(5, 10))
                       try:
-                          await client.send_message(peer, item['message'])
+                          cmd_msg = await client.send_message(peer, item['message'])
                           if item.get('button'):
-                              await asyncio.sleep(3) 
                               found = False
-                              async for m in client.iter_messages(peer, limit=3):
-                                  if m.buttons: 
-                                      res = await click_button(client, peer, m, item['button'])
-                                      if res: 
-                                          log_success.append(f"{peer}: 点击 [{res}]")
-                                          sys_log(f"✅ {peer}: 绝杀点击成功 [{res}]")
-                                          found = True
-                                      break 
+                              for _ in range(5): 
+                                  await asyncio.sleep(3) 
+                                  async for m in client.iter_messages(peer, limit=3):
+                                      if m.id > cmd_msg.id and m.buttons: 
+                                          res = await click_button(client, peer, m, item['button'])
+                                          if res: 
+                                              log_success.append(f"{peer}: 点击 [{res}]")
+                                              sys_log(f"✅ {peer}: 绝杀成功 [{res}]")
+                                              found = True
+                                          break 
+                                  if found: break
                               if not found: log_warn.append(f"{peer}: 识别或点击超时")
                           else: log_success.append(f"{peer}: 指令已发送")
                       except Exception as e: log_fail.append(f"{peer}: {str(e)}")
