@@ -60,7 +60,8 @@ jobs:
           from email.header import Header
           from email.utils import formataddr
 
-          AC_TAG, FOCUS_PEER = "大号", "@lilyembybot"
+          # 👇 重点关注已修改
+          AC_TAG, FOCUS_PEER = "大号", "@xyz_gy_bot"
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
           log_success, log_warn, log_fail = [], [], []
 
@@ -129,7 +130,7 @@ jobs:
               try:
                   mail_user, mail_pass = os.environ.get('MAIL_USER'), os.environ.get('MAIL_PASS')
                   if not mail_user or not mail_pass: return
-                  today = (datetime.datetime.utcnow() + timedelta(hours=8)).strftime('%Y-%m-%d') if 'timedelta' in globals() else (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
+                  today = (datetime.datetime.utcnow() + datetime.timedelta(hours=8)).strftime('%Y-%m-%d')
                   focus_status, focus_emoji = "💤 未检测", "❔"
                   if any(FOCUS_PEER in s for s in log_success): focus_status, focus_emoji = "✅ 签到成功", "🐱"
                   elif any(FOCUS_PEER in s for s in log_warn): focus_status, focus_emoji = "⚠️ 异常", "🙀"
