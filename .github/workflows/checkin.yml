@@ -1,15 +1,22 @@
-name: Telegram Auto Checkin (Main) - V5.6
+name: Telegram Auto Checkin (Main) - V5.7
 
 concurrency:
   group: ${{ github.workflow }}
 
 on:
   schedule:
-    - cron: '12 23 * * *'
-    - cron: '38 0 * * *'
-    - cron: '24 1 * * *'
-    - cron: '45 2 * * *'
-    - cron: '2 3 * * *'
+    # === 周一至周五 (北京时间 7:00 - 9:00 随机) ===
+    # UTC 23:12 (周日-周四) -> 北京时间 07:12 (周一-周五)
+    - cron: '12 23 * * 0-4'
+    # UTC 00:38 (周一-周五) -> 北京时间 08:38 (周一-周五)
+    - cron: '38 0 * * 1-5'
+    
+    # === 周六至周日 (北京时间 10:00 - 11:30 随机) ===
+    # UTC 02:15 (周六-周日) -> 北京时间 10:15 (周六-周日)
+    - cron: '15 2 * * 6,0'
+    # UTC 03:02 (周六-周日) -> 北京时间 11:02 (周六-周日)
+    - cron: '2 3 * * 6,0'
+    
   workflow_dispatch:
     inputs:
       force_run:
@@ -60,7 +67,6 @@ jobs:
           from email.header import Header
           from email.utils import formataddr
 
-          # 👇 重点关注已修改
           AC_TAG, FOCUS_PEER = "大号", "@xyz_gy_bot"
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
           log_success, log_warn, log_fail = [], [], []
@@ -188,7 +194,11 @@ jobs:
               sys_log(f"🔍 [{AC_TAG}] 检查账本..."); is_done, issue_num = check_github_ledger(today_str, month_str)
               if is_done and not is_force: sys_log("🛑 今日已签，下班。"); return
 
-              await asyncio.sleep(random.randint(5, 15))
+              # 👇 新增：大幅度随机前摇 (30秒~5分钟)，彻底打乱每天的签到时间点
+              delay_secs = random.randint(30, 300)
+              sys_log(f"⏰ 正在模拟人类发呆，等待 {delay_secs} 秒...")
+              await asyncio.sleep(delay_secs)
+
               async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110") as client:
                   random.shuffle(configs)
                   for index, item in enumerate(configs):
