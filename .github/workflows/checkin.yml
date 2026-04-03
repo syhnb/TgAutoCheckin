@@ -1,22 +1,14 @@
-name: Telegram Auto Checkin (Main) - V5.7
+name: Telegram Auto Checkin (Main) - V5.8 (Speed Up)
 
 concurrency:
   group: ${{ github.workflow }}
 
 on:
   schedule:
-    # === 周一至周五 (北京时间 7:00 - 9:00 随机) ===
-    # UTC 23:12 (周日-周四) -> 北京时间 07:12 (周一-周五)
     - cron: '12 23 * * 0-4'
-    # UTC 00:38 (周一-周五) -> 北京时间 08:38 (周一-周五)
     - cron: '38 0 * * 1-5'
-    
-    # === 周六至周日 (北京时间 10:00 - 11:30 随机) ===
-    # UTC 02:15 (周六-周日) -> 北京时间 10:15 (周六-周日)
     - cron: '15 2 * * 6,0'
-    # UTC 03:02 (周六-周日) -> 北京时间 11:02 (周六-周日)
     - cron: '2 3 * * 6,0'
-    
   workflow_dispatch:
     inputs:
       force_run:
@@ -63,6 +55,7 @@ jobs:
           from google.genai import types
           from telethon import TelegramClient
           from telethon.sessions import StringSession
+          from telethon.errors import FloodWaitError
           from email.mime.text import MIMEText
           from email.header import Header
           from email.utils import formataddr
@@ -106,7 +99,7 @@ jobs:
               key = os.environ.get('GEMINI_API_KEY')
               if not key: return None
               try:
-                  sys_log(f"📷 发现 {peer} 验证图片，AI 极速识别中...")
+                  sys_log(f"📷 发现 {peer} 验证图，AI 极速识别...")
                   photo_bytes = await client.download_media(message.photo, file=bytes)
                   ai_client = genai.Client(api_key=key)
                   response = ai_client.models.generate_content(
@@ -114,7 +107,7 @@ jobs:
                       contents=["图中是什么？仅回答一个名词，如：报纸、熊猫、马桶", types.Part.from_bytes(data=photo_bytes, mime_type='image/jpeg')]
                   )
                   keyword = response.text.strip().lower()
-                  sys_log(f"🧠 AI 极速响应: {keyword}")
+                  sys_log(f"🧠 AI 响应: {keyword}")
                   return keyword
               except Exception as e:
                   sys_log(f"❌ 识图报错: {e}"); return None
@@ -156,17 +149,11 @@ jobs:
                           <div style="font-size:20px; font-weight:bold; margin-bottom:20px;">
                               {focus_emoji} {focus_status}
                           </div>
-                          
-                          <div style="font-size:14px; color:#555; margin-bottom:15px; padding-top:15px; border-top:1px dashed #eee;">
-                              🤖 尊贵的本体：{AC_TAG} 任务执行完毕。
-                          </div>
-                          
                           <div style="display:flex; justify-content:space-between; gap:10px; font-size:14px; font-weight:bold; text-align:center;">
                               <div style="flex:1; color:#2e7d32; background:#e8f5e9; padding:10px; border-radius:6px;">✅ 成功: {len(log_success)}</div>
                               <div style="flex:1; color:#ef6c00; background:#fff3e0; padding:10px; border-radius:6px;">⚠️ 异常: {len(log_warn)}</div>
                               <div style="flex:1; color:#c62828; background:#ffebee; padding:10px; border-radius:6px;">❌ 失败: {len(log_fail)}</div>
                           </div>
-                          
                           {format_list('❌ 失败列表', '#c62828', log_fail)}
                           {format_list('⚠️ 异常列表', '#ef6c00', log_warn)}
                           {format_list('✅ 成功列表', '#2e7d32', log_success)}
@@ -174,13 +161,40 @@ jobs:
                   </div>
                   """
                   message = MIMEText(html_content, 'html', 'utf-8')
-                  message['From'] = formataddr(("Telegram管家", mail_user))
+                  message['From'] = formataddr(("TG并发管家", mail_user))
                   title_icon = "❌" if log_fail else ("⚠️" if log_warn else "✅")
                   message['Subject'] = Header(f"TG战报 ({AC_TAG}) | {title_icon} 成功:{len(log_success)} 异常:{len(log_warn)} 失败:{len(log_fail)}", 'utf-8')
                   with smtplib.SMTP_SSL('smtp.qq.com', 465) as smtp:
                       smtp.login(mail_user, mail_pass)
                       smtp.sendmail(mail_user, [mail_user], message.as_string())
               except Exception as e: print(f"📧 邮件报错: {e}")
+
+          async def process_task(client, item, sem):
+              async with sem:
+                  peer = item['peer']
+                  await asyncio.sleep(random.uniform(2, 6))
+                  try:
+                      cmd_msg = await client.send_message(peer, item['message'])
+                      if item.get('button'):
+                          found = False
+                          for _ in range(5): 
+                              await asyncio.sleep(3) 
+                              async for m in client.iter_messages(peer, limit=3):
+                                  if m.id > cmd_msg.id and m.buttons: 
+                                      res = await click_button(client, peer, m, item['button'])
+                                      if res: 
+                                          log_success.append(f"{peer}: 点击 [{res}]")
+                                          sys_log(f"✅ {peer}: 绝杀成功 [{res}]")
+                                          found = True
+                                      break 
+                              if found: break
+                          if not found: log_warn.append(f"{peer}: 识别或点击超时")
+                      else: log_success.append(f"{peer}: 指令已发送")
+                  except FloodWaitError as e:
+                      sys_log(f"🚦 触发官方安全限流，原地罚站 {e.seconds} 秒...")
+                      await asyncio.sleep(e.seconds)
+                      log_warn.append(f"{peer}: 触发限流跳过")
+                  except Exception as e: log_fail.append(f"{peer}: {str(e)}")
 
           async def main():
               try:
@@ -194,35 +208,17 @@ jobs:
               sys_log(f"🔍 [{AC_TAG}] 检查账本..."); is_done, issue_num = check_github_ledger(today_str, month_str)
               if is_done and not is_force: sys_log("🛑 今日已签，下班。"); return
 
-              # 👇 新增：大幅度随机前摇 (30秒~5分钟)，彻底打乱每天的签到时间点
               delay_secs = random.randint(30, 300)
               sys_log(f"⏰ 正在模拟人类发呆，等待 {delay_secs} 秒...")
               await asyncio.sleep(delay_secs)
 
               async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus PJZ110") as client:
                   random.shuffle(configs)
-                  for index, item in enumerate(configs):
-                      peer = item['peer']
-                      if index > 0 and index % 5 == 0: await asyncio.sleep(random.randint(15, 25))
-                      await asyncio.sleep(random.randint(5, 10))
-                      try:
-                          cmd_msg = await client.send_message(peer, item['message'])
-                          if item.get('button'):
-                              found = False
-                              for _ in range(5): 
-                                  await asyncio.sleep(3) 
-                                  async for m in client.iter_messages(peer, limit=3):
-                                      if m.id > cmd_msg.id and m.buttons: 
-                                          res = await click_button(client, peer, m, item['button'])
-                                          if res: 
-                                              log_success.append(f"{peer}: 点击 [{res}]")
-                                              sys_log(f"✅ {peer}: 绝杀成功 [{res}]")
-                                              found = True
-                                          break 
-                                  if found: break
-                              if not found: log_warn.append(f"{peer}: 识别或点击超时")
-                          else: log_success.append(f"{peer}: 指令已发送")
-                      except Exception as e: log_fail.append(f"{peer}: {str(e)}")
+                  sem = asyncio.Semaphore(3)
+                  tasks = [process_task(client, item, sem) for item in configs]
+                  sys_log(f"🚀 开始并发签到，任务总量: {len(tasks)}")
+                  await asyncio.gather(*tasks)
+                  
                   if issue_num: write_github_ledger(issue_num, today_str)
                   send_email_report()
 
