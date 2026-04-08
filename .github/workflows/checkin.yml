@@ -60,7 +60,7 @@ jobs:
           from email.header import Header
           from email.utils import formataddr
 
-          AC_TAG, FOCUS_PEER = "大号", "@xyz_gy_bot"
+          AC_TAG, FOCUS_PEER = "大号", "@lilyembybot"
           FALLBACK_KEYWORDS = ["签到", "打卡", "Check In", "Check-in", "Sign In", "领取", "Collect", "Bonus"]
           log_success, log_warn, log_fail = [], [], []
 
