@@ -1,15 +1,14 @@
-name: Telegram Auto Checkin (Main) - V6.3 (Adaptive Random)
+name: Telegram Auto Checkin (Main) - V6.4 (Stealth Edition)
 
 concurrency:
   group: ${{ github.workflow }}
 
 on:
   schedule:
-    # 整体提前，给 GitHub 拥堵留足空间 (UTC时间)
-    - cron: '30 22 * * *'   # 约 BJT 06:30
-    - cron: '30 23 * * *'   # 约 BJT 07:30
-    - cron: '30 0 * * *'    # 约 BJT 08:30
-    - cron: '30 1 * * *'    # 约 BJT 09:30
+    - cron: '30 22 * * *'
+    - cron: '30 23 * * *'
+    - cron: '30 0 * * *'
+    - cron: '30 1 * * *'
   workflow_dispatch:
     inputs:
       force_run:
@@ -212,7 +211,6 @@ jobs:
               sys_log(f"🔍 [{AC_TAG}] 检查账本..."); is_done, issue_num = check_github_ledger(today_str, month_str)
               if is_done and not is_force: sys_log("🛑 今日已签，下班。"); return
 
-              # ===== V6.3 自适应动态骰子系统 =====
               current_hour = utc_now.hour + (utc_now.minute / 60.0)
               
               if current_hour < 7.5:
@@ -228,13 +226,22 @@ jobs:
                   if random.random() > prob:
                       sys_log(f"🎲 [自适应防封] 当前时段【{stage}】，掷骰子未中 (当前唤醒率 {int(prob*100)}%)，继续潜伏等待下次闹钟！")
                       return
-              # =================================
 
               delay_secs = random.randint(30, 300)
               sys_log(f"⏰ 决定起床！假装还在摸鱼，等待 {delay_secs} 秒后出击...")
               await asyncio.sleep(delay_secs)
 
-              async with TelegramClient(StringSession(session), api_id, api_hash, device_model="OnePlus 13") as client:
+              # V6.4: 注入极致逼真的设备底层环境参数
+              async with TelegramClient(
+                  StringSession(session), 
+                  api_id, 
+                  api_hash, 
+                  device_model="OnePlus 13 (PJZ110)",
+                  system_version="ColorOS 16.0.5",
+                  app_version="12.6.4",
+                  lang_code="zh",
+                  system_lang_code="zh-CN"
+              ) as client:
                   random.shuffle(configs)
                   sem = asyncio.Semaphore(3)
                   tasks = [process_task(client, item, sem) for item in configs]
